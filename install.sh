@@ -273,8 +273,52 @@ select_provider() {
       ;;
   esac
 
-  # Apply provider config
-  cp "$PROVIDER_CONFIG" "$PI_AGENT_DIR/settings.json"
+  # MERGE provider config into existing settings.json (don't overwrite!)
+  if [[ -f "$PI_AGENT_DIR/settings.json" ]]; then
+    python3 -c "
+import json, sys
+
+with open('$PI_AGENT_DIR/settings.json') as f:
+    existing = json.load(f)
+with open('$PROVIDER_CONFIG') as f:
+    template = json.load(f)
+
+# Only merge provider-specific fields
+existing['defaultProvider'] = template['defaultProvider']
+existing['defaultModel'] = template['defaultModel']
+existing['assistantName'] = template.get('assistantName', existing.get('assistantName', 'Helios'))
+
+# Merge enabledModels: ADD template models to existing, don't replace
+template_models = set(template.get('enabledModels', []))
+existing_models = set(existing.get('enabledModels', []))
+existing['enabledModels'] = sorted(list(existing_models | template_models))
+
+# Ensure skills paths exist
+if 'skills' not in existing:
+    existing['skills'] = template.get('skills', [])
+
+# Ensure packages exist (keep existing format — npm: prefix, object entries, etc.)
+if 'packages' not in existing:
+    existing['packages'] = template.get('packages', [])
+
+# Ensure other required keys
+existing.setdefault('enableSkillCommands', True)
+existing.setdefault('hideThinkingBlock', False)
+
+with open('$PI_AGENT_DIR/settings.json', 'w') as f:
+    json.dump(existing, f, indent=2)
+    f.write('\n')
+
+print('Merged provider config into existing settings.json')
+" || {
+      # Fallback if python3 fails: just copy the template
+      warn "python3 merge failed — falling back to template copy"
+      cp "$PROVIDER_CONFIG" "$PI_AGENT_DIR/settings.json"
+    }
+  else
+    # No existing settings.json — use template as-is
+    cp "$PROVIDER_CONFIG" "$PI_AGENT_DIR/settings.json"
+  fi
   success "settings.json configured for $SELECTED_PROVIDER"
 }
 
@@ -321,7 +365,7 @@ setup_api_keys() {
     if [[ -n "$key_val" ]]; then
       # Update the env file (replace the empty key= line)
       if grep -q "^${key_name}=" "$env_file"; then
-        sed -i.bak "s|^${key_name}=.*|${key_name}=${key_val}|" "$env_file"
+        sed -i.bak "s|^${key_name}=.*|${key_name}=\"${key_val}\"|" "$env_file"
         rm -f "${env_file}.bak"
       else
         echo "${key_name}=${key_val}" >> "$env_file"
@@ -425,8 +469,6 @@ setup_familiar() {
   fi
 
   info "Cloning Familiar → ~/.familiar/"
-  warn "NOTE: Verify the Familiar repo URL before proceeding."
-  warn "Assumed URL: https://$FAMILIAR_REPO.git"
   echo ""
   ask "Proceed with clone? [y/N]:"
   read -r confirm_familiar
@@ -489,6 +531,21 @@ setup_memgraph() {
 
   run_with_spinner "Starting Memgraph container" \
     docker compose -f "$compose_file" up -d
+
+  # Wait for Memgraph to be ready (up to 60 seconds)
+  info "Waiting for Memgraph to be ready..."
+  local retries=0
+  while [[ $retries -lt 12 ]]; do
+    if docker exec helios-memgraph mg_client --host localhost --port 7687 --run "RETURN 1;" &>/dev/null; then
+      success "Memgraph is healthy and accepting connections"
+      break
+    fi
+    sleep 5
+    retries=$((retries + 1))
+  done
+  if [[ $retries -ge 12 ]]; then
+    warn "Memgraph may still be starting — check: docker logs helios-memgraph"
+  fi
 
   # Check uvx for MCP server
   if ! command -v uvx &>/dev/null; then
