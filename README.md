@@ -29,7 +29,6 @@ bash ~/helios-team-installer/install.sh
 | **Familiar Skills** | Gmail, Calendar, Drive, transcription skills (optional) |
 | **Provider Config** | settings.json wired to your chosen AI provider |
 | **API Keys** | Guided .env setup with interactive prompts |
-| **Memgraph** | Knowledge graph via Docker (optional) |
 
 ---
 
@@ -71,17 +70,12 @@ bash ~/helios-team-installer/install.sh
          ┌────────────────┼───────────────────┐
          │                │                   │
 ┌────────▼───────┐ ┌──────▼──────┐  ┌────────▼───────┐
-│  AI Provider   │ │  MCP Servers│  │   Memgraph     │
-│                │ │             │  │  (optional)     │
-│  Anthropic     │ │  GitHub     │  │  bolt://7687   │
-│  Bedrock       │ │  Figma      │  │  Lab: :3000    │
-│  OpenAI        │ │  Memgraph   │  └────────────────┘
+│  AI Provider   │ │  MCP Servers│  │   ~/.familiar/ │
+│                │ │             │  │   (optional)    │
+│  Anthropic     │ │  GitHub     │  │  gmcli gccli   │
+│  Bedrock       │ │  Figma      │  │  gdcli transcr.│
+│  OpenAI        │ │             │  └────────────────┘
 └────────────────┘ └─────────────┘
-         │
-┌────────▼──────────────────────────────────────────────────────────┐
-│                   ~/.familiar/  (optional)                         │
-│   skills/gmcli  skills/gccli  skills/gdcli  skills/transcribe     │
-└───────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -93,7 +87,6 @@ bash ~/helios-team-installer/install.sh
 | Node.js | 18+ | [nodejs.org](https://nodejs.org) or `brew install node` |
 | npm | Any | Bundled with Node |
 | git | Any | `brew install git` or `apt install git` |
-| Docker | Any | [docker.com](https://docker.com) — **optional** (Memgraph only) |
 
 ---
 
@@ -112,7 +105,7 @@ The AI personality loaded into Pi. Helios plans, delegates, coordinates, and ver
 
 | Package | Purpose |
 |---------|---------|
-| `pi-mcp-adapter` | MCP server connections (GitHub, Figma, Memgraph) |
+| `pi-mcp-adapter` | MCP server connections (GitHub, Figma) |
 | `pi-subagents` | Feynman multi-agent delegation framework |
 | `pi-messenger` | Crew coordination & multi-agent messaging |
 | `pi-coordination` | Parallel task coordination with plan/coordinate tools |
@@ -177,7 +170,6 @@ The installer is safe to run multiple times:
 - Existing `.env` → only fills in empty keys
 - Existing `settings.json` → overwritten with selected provider config
 - Existing Pi CLI → skipped (version shown)
-- Existing Memgraph → skipped if already running
 
 ---
 
@@ -206,10 +198,7 @@ pi update
 git clone https://github.com/sweetcheeks72/familiar.git ~/.familiar
 # NOTE: Verify the Familiar repo URL before running
 
-# 7. (Optional) Memgraph
-docker compose -f ~/helios-team-installer/docker-compose.memgraph.yml up -d
-
-# 8. Verify
+# 7. Verify
 bash ~/helios-team-installer/verify.sh
 ```
 
@@ -246,22 +235,6 @@ bash ~/helios-team-installer/verify.sh
 1. Ensure Bedrock model access is enabled: AWS Console → Bedrock → Model access
 2. Check your IAM user/role has `bedrock:InvokeModel` permission
 3. Verify region matches where you enabled access
-
-### Memgraph won't start
-```bash
-# Check Docker is running
-docker ps
-
-# Check port conflicts
-lsof -i :7687
-lsof -i :7444
-
-# View logs
-docker logs helios-memgraph
-
-# Restart
-docker compose -f ~/helios-team-installer/docker-compose.memgraph.yml restart
-```
 
 ### `.env` not being loaded
 Pi loads `.env` from `~/.pi/agent/.env` automatically. Verify:
@@ -309,7 +282,6 @@ helios-team-installer/
 ├── verify.sh                     # Post-install health check
 ├── uninstall.sh                  # Clean uninstall
 ├── .env.template                 # API key template
-├── docker-compose.memgraph.yml   # Memgraph Docker setup
 ├── provider-configs/
 │   ├── anthropic.json            # settings.json for Anthropic
 │   ├── bedrock.json              # settings.json for AWS Bedrock

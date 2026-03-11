@@ -3,7 +3,7 @@
 # Helios + Pi Team Installer
 # =============================================================================
 # Installs: Pi CLI, Helios Agent, 20 git packages, extensions, Familiar skills,
-# API key setup, optional Memgraph via Docker
+# API key setup
 # =============================================================================
 
 set -euo pipefail
@@ -137,15 +137,6 @@ check_prerequisites() {
     success "curl ✓"
   else
     warn "curl not found — some features may be limited"
-  fi
-
-  # Docker (optional)
-  if command -v docker &>/dev/null; then
-    success "Docker $(docker --version | awk '{print $3}' | tr -d ',') ✓ (optional)"
-    DOCKER_AVAILABLE=true
-  else
-    info "Docker not found — Memgraph setup will be skipped (optional)"
-    DOCKER_AVAILABLE=false
   fi
 
   if [[ ${#missing[@]} -gt 0 ]]; then
@@ -503,78 +494,6 @@ setup_familiar() {
   info "See: ~/.familiar/skills/gmcli/SKILL.md for OAuth configuration instructions."
 }
 
-# ─── Memgraph via Docker ──────────────────────────────────────────────────────
-setup_memgraph() {
-  step "Memgraph (optional)"
-
-  if [[ "$DOCKER_AVAILABLE" != "true" ]]; then
-    info "Docker not available — skipping Memgraph setup"
-    return 0
-  fi
-
-  echo ""
-  ask "Set up Memgraph (knowledge graph for session memory)? [y/N]:"
-  read -r install_memgraph
-  install_memgraph="${install_memgraph:-n}"
-
-  if [[ ! "$install_memgraph" =~ ^[Yy]$ ]]; then
-    info "Skipping Memgraph setup"
-    return 0
-  fi
-
-  local compose_file="$INSTALLER_DIR/docker-compose.memgraph.yml"
-
-  if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "helios-memgraph"; then
-    success "Memgraph container already running"
-    return 0
-  fi
-
-  run_with_spinner "Starting Memgraph container" \
-    docker compose -f "$compose_file" up -d
-
-  # Wait for Memgraph to be ready (up to 60 seconds)
-  info "Waiting for Memgraph to be ready..."
-  local retries=0
-  while [[ $retries -lt 12 ]]; do
-    if docker exec helios-memgraph mg_client --host localhost --port 7687 --run "RETURN 1;" &>/dev/null; then
-      success "Memgraph is healthy and accepting connections"
-      break
-    fi
-    sleep 5
-    retries=$((retries + 1))
-  done
-  if [[ $retries -ge 12 ]]; then
-    warn "Memgraph may still be starting — check: docker logs helios-memgraph"
-  fi
-
-  # Check uvx for MCP server
-  if ! command -v uvx &>/dev/null; then
-    warn "uvx not found — needed for Memgraph MCP server"
-    ask "Install uv (includes uvx)? [y/N]:"
-    read -r install_uv
-    if [[ "$install_uv" =~ ^[Yy]$ ]]; then
-      curl -LsSf https://astral.sh/uv/install.sh | sh
-      success "uv/uvx installed"
-    else
-      warn "Install manually: curl -LsSf https://astral.sh/uv/install.sh | sh"
-    fi
-  else
-    success "uvx found: $(uvx --version 2>/dev/null)"
-  fi
-
-  # Update .env with Memgraph settings
-  local env_file="$PI_AGENT_DIR/.env"
-  sed -i.bak \
-    -e 's|^MEMGRAPH_HOST=.*|MEMGRAPH_HOST=127.0.0.1|' \
-    -e 's|^MEMGRAPH_PORT=.*|MEMGRAPH_PORT=7687|' \
-    "$env_file" 2>/dev/null || true
-  rm -f "${env_file}.bak"
-
-  info "Memgraph: bolt://localhost:7687"
-  info "Memgraph Lab: http://localhost:7444"
-  success "Memgraph started"
-}
-
 # ─── Verification ─────────────────────────────────────────────────────────────
 run_verification() {
   step "Verification"
@@ -707,7 +626,6 @@ main() {
   setup_api_keys
   wire_env_to_shell
   setup_familiar
-  setup_memgraph
   run_verification
   print_quickstart
 

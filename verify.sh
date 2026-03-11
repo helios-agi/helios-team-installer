@@ -60,12 +60,6 @@ else
   check_fail "git not found"
 fi
 
-if command -v docker &>/dev/null; then
-  check_pass "docker: $(docker --version | awk '{print $3}' | tr -d ',')"
-else
-  check_warn "docker not found — Memgraph requires Docker (optional)"
-fi
-
 # ─── 2. Agent Directory ───────────────────────────────────────────────────────
 section "2. Agent Directory (~/.pi/agent/)"
 
@@ -240,29 +234,6 @@ if [[ -n "$figma_token" ]]; then
   check_pass "Figma MCP token configured"
 else
   check_warn "Figma MCP token not set (optional)"
-fi
-
-# ─── 8. Memgraph ──────────────────────────────────────────────────────────────
-section "8. Memgraph (optional)"
-
-if command -v docker &>/dev/null; then
-  if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "helios-memgraph"; then
-    check_pass "Memgraph container: running"
-    
-    # Test Bolt connection
-    if command -v nc &>/dev/null; then
-      if nc -z 127.0.0.1 7687 2>/dev/null; then
-        check_pass "Memgraph Bolt port 7687: reachable"
-      else
-        check_fail "Memgraph Bolt port 7687: unreachable"
-      fi
-    fi
-  else
-    check_warn "Memgraph container not running (optional)"
-    check_warn "Start with: docker compose -f ~/helios-team-installer/docker-compose.memgraph.yml up -d"
-  fi
-else
-  check_warn "Docker not available — Memgraph check skipped"
 fi
 
 # ─── Report Card ──────────────────────────────────────────────────────────────

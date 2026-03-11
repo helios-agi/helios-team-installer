@@ -65,7 +65,6 @@ You need all three layers. The installer sets them all up.
 
 | What | Why | How to install |
 |------|-----|----------------|
-| **Docker** | For Memgraph (AI memory database) | [docker.com](https://docker.com) |
 | **An API key** | At least one AI provider | See "Choosing a Provider" below |
 
 ### Accept your GitHub invitations FIRST
@@ -135,9 +134,7 @@ Here's what happens at each stage (the installer tells you, but so you're not su
 
 **8. Familiar skills (optional)** — Asks if you want Gmail, Calendar, Drive integration. Say yes if you want those. Say no if you just want coding features.
 
-**9. Memgraph (optional)** — Asks if you want the knowledge graph database (requires Docker). This gives Helios a memory across sessions. Nice to have, not required to start.
-
-**10. Verification** — Counts your agents, skills, extensions and tells you if everything looks good.
+**9. Verification** — Counts your agents, skills, extensions and tells you if everything looks good.
 
 ### After the installer finishes:
 
@@ -269,11 +266,6 @@ source ~/.zshrc
 ### Running the health check
 ```bash
 bash ~/helios-team-installer/verify.sh
-```
-
-### Starting Memgraph (if you skipped it during install)
-```bash
-docker compose -f ~/helios-team-installer/docker-compose.memgraph.yml up -d
 ```
 
 ### Uninstalling

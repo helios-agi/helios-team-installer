@@ -110,34 +110,7 @@ if [[ -d "$FAMILIAR_DIR" ]]; then
   fi
 fi
 
-# ─── 5. Remove Docker Containers ──────────────────────────────────────────────
-if command -v docker &>/dev/null; then
-  if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "helios-memgraph"; then
-    ask "Stop and remove Memgraph Docker container(s)? [y/N]:"
-    read -r remove_docker
-    if [[ "$remove_docker" =~ ^[Yy]$ ]]; then
-      ask "  Also remove Memgraph data volume? [y/N]:"
-      read -r remove_volume
-
-      docker stop helios-memgraph 2>/dev/null || true
-      docker rm helios-memgraph 2>/dev/null || true
-      docker stop helios-memgraph-lab 2>/dev/null || true
-      docker rm helios-memgraph-lab 2>/dev/null || true
-      success "Memgraph containers removed"
-
-      if [[ "$remove_volume" =~ ^[Yy]$ ]]; then
-        docker volume rm helios-memgraph-data 2>/dev/null || true
-        success "Memgraph data volume removed"
-      else
-        info "Memgraph data volume kept (helios-memgraph-data)"
-      fi
-    else
-      info "Keeping Docker containers"
-    fi
-  fi
-fi
-
-# ─── 6. Shell Profile Note ────────────────────────────────────────────────────
+# ─── 5. Shell Profile Note ────────────────────────────────────────────────────
 echo ""
 echo -e "  ${BOLD}Note on API Keys:${RESET}"
 echo -e "  ${DIM}API keys set in shell profiles (e.g., ~/.zshrc, ~/.bashrc) were NOT removed.${RESET}"
