@@ -146,6 +146,20 @@ if [[ -f "$HOME/.pi-agent-env.backup."* ]] 2>/dev/null; then
   echo -e "  ${DIM}Your .env was backed up — find it with: ls ~/.pi-agent-env.backup.*${RESET}"
 fi
 
+# Offer to remove the source line from shell profile
+for profile in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.profile"; do
+  if grep -qF ".pi/agent/.env" "$profile" 2>/dev/null; then
+    ask "Remove Helios .env source line from $profile? [y/N]:"
+    read -r remove_source
+    if [[ "$remove_source" =~ ^[Yy]$ ]]; then
+      sed -i.bak '/.pi\/agent\/\.env/d' "$profile"
+      sed -i.bak '/# Helios\/Pi API keys/d' "$profile"
+      rm -f "${profile}.bak"
+      success "Removed .env source from $profile"
+    fi
+  fi
+done
+
 # ─── Done ─────────────────────────────────────────────────────────────────────
 echo ""
 echo -e "  ${GREEN}${BOLD}✓ Uninstall complete${RESET}"

@@ -4,6 +4,15 @@
   "defaultModel": "us.anthropic.claude-opus-4-6-v1",
   "enableSkillCommands": true,
   "hideThinkingBlock": false,
+  "enabledModels": [
+    "amazon-bedrock/us.anthropic.claude-sonnet-4-6",
+    "amazon-bedrock/us.anthropic.claude-opus-4-6-v1",
+    "amazon-bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "amazon-bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0",
+    "amazon-bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "anthropic/claude-sonnet-4-5-20250514",
+    "anthropic/claude-haiku-4-5-20241022"
+  ],
   "skills": [
     "~/.pi/agent/skills",
     "~/.familiar/skills"

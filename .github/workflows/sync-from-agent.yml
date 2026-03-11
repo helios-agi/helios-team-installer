@@ -1,0 +1,51 @@
+name: Sync from helios-agent
+
+on:
+  repository_dispatch:
+    types: [agent-updated]
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch latest settings from helios-agent
+        run: |
+          curl -sL "https://raw.githubusercontent.com/sweetcheeks72/helios-agent/main/settings.json" -o /tmp/agent-settings.json
+
+          # Extract packages list
+          PACKAGES=$(python3 -c "import json; d=json.load(open('/tmp/agent-settings.json')); print(json.dumps(d.get('packages',[]), indent=4))")
+
+          # Update each provider config
+          for config in provider-configs/*.json; do
+            python3 -c "
+import json
+with open('$config') as f: cfg = json.load(f)
+with open('/tmp/agent-settings.json') as f: agent = json.load(f)
+cfg['packages'] = agent.get('packages', cfg.get('packages', []))
+cfg['skills'] = agent.get('skills', cfg.get('skills', []))
+with open('$config', 'w') as f: json.dump(cfg, f, indent=2)
+print(f'Updated: $config')
+"
+          done
+
+      - name: Check for changes
+        id: changes
+        run: |
+          if git diff --quiet; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create PR
+        if: steps.changes.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "chore: sync packages and skills from helios-agent"
+          title: "🔄 Sync from helios-agent"
+          body: "Auto-sync of packages and skills configuration from sweetcheeks72/helios-agent main branch."
+          branch: sync/agent-update
+          base: main

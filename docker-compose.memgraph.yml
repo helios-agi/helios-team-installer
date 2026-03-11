@@ -32,6 +32,7 @@ services:
     container_name: helios-memgraph-lab
     ports:
       - "3000:3000"   # Memgraph Lab UI → http://localhost:3000
+      # Note: Some setups use port 7444 instead. Change to "7444:3000" if preferred.
     depends_on:
       - memgraph
     environment:

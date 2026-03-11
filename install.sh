@@ -362,6 +362,45 @@ setup_api_keys() {
   success ".env configured at $env_file"
 }
 
+# ─── Wire API Keys to Shell ───────────────────────────────────────────────────
+wire_env_to_shell() {
+  step "Wiring API keys to shell environment"
+
+  local env_file="$PI_AGENT_DIR/.env"
+  local shell_profile=""
+
+  # Detect shell profile
+  if [[ -n "${ZSH_VERSION:-}" ]] || [[ "$SHELL" == */zsh ]]; then
+    shell_profile="$HOME/.zshrc"
+  elif [[ -n "${BASH_VERSION:-}" ]] || [[ "$SHELL" == */bash ]]; then
+    shell_profile="$HOME/.bashrc"
+  else
+    shell_profile="$HOME/.profile"
+  fi
+
+  local source_line="# Helios/Pi API keys"
+  local source_cmd="[ -f ~/.pi/agent/.env ] && set -a && source ~/.pi/agent/.env && set +a"
+
+  if grep -qF "source ~/.pi/agent/.env" "$shell_profile" 2>/dev/null || grep -qF ".pi/agent/.env" "$shell_profile" 2>/dev/null; then
+    success "Shell profile already sources .env"
+  else
+    echo "" >> "$shell_profile"
+    echo "$source_line" >> "$shell_profile"
+    echo "$source_cmd" >> "$shell_profile"
+    success "Added .env sourcing to $shell_profile"
+  fi
+
+  # Source now for immediate use
+  if [[ -f "$env_file" ]]; then
+    set -a
+    source "$env_file"
+    set +a
+    success "API keys loaded into current session"
+  fi
+
+  warn "Restart your terminal or run: source $shell_profile"
+}
+
 # ─── Familiar Skills ──────────────────────────────────────────────────────────
 setup_familiar() {
   step "Familiar Skills (optional)"
@@ -402,6 +441,24 @@ setup_familiar() {
     return 0
   }
   success "Familiar cloned to $FAMILIAR_DIR"
+
+  # Check if Familiar needs dependency installation
+  if [[ -f "$FAMILIAR_DIR/pnpm-lock.yaml" ]]; then
+    if command -v pnpm &>/dev/null; then
+      ask "Run pnpm install for Familiar dependencies? [y/N]:"
+      read -r run_pnpm
+      if [[ "$run_pnpm" =~ ^[Yy]$ ]]; then
+        run_with_spinner "Installing Familiar dependencies" \
+          pnpm --dir "$FAMILIAR_DIR" install || warn "pnpm install had issues"
+      fi
+    else
+      warn "pnpm not found — Familiar skills may need manual setup: cd ~/.familiar && pnpm install"
+    fi
+  fi
+
+  echo ""
+  info "NOTE: Google Workspace skills (Gmail, Calendar, Drive) require OAuth setup."
+  info "See: ~/.familiar/skills/gmcli/SKILL.md for OAuth configuration instructions."
 }
 
 # ─── Memgraph via Docker ──────────────────────────────────────────────────────
@@ -432,6 +489,21 @@ setup_memgraph() {
 
   run_with_spinner "Starting Memgraph container" \
     docker compose -f "$compose_file" up -d
+
+  # Check uvx for MCP server
+  if ! command -v uvx &>/dev/null; then
+    warn "uvx not found — needed for Memgraph MCP server"
+    ask "Install uv (includes uvx)? [y/N]:"
+    read -r install_uv
+    if [[ "$install_uv" =~ ^[Yy]$ ]]; then
+      curl -LsSf https://astral.sh/uv/install.sh | sh
+      success "uv/uvx installed"
+    else
+      warn "Install manually: curl -LsSf https://astral.sh/uv/install.sh | sh"
+    fi
+  else
+    success "uvx found: $(uvx --version 2>/dev/null)"
+  fi
 
   # Update .env with Memgraph settings
   local env_file="$PI_AGENT_DIR/.env"
@@ -576,6 +648,7 @@ main() {
   select_provider       # Provider BEFORE packages — pi update reads settings.json
   install_packages
   setup_api_keys
+  wire_env_to_shell
   setup_familiar
   setup_memgraph
   run_verification

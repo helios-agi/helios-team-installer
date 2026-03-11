@@ -162,6 +162,22 @@ else
   check_warn "~/.pi/agent/extensions/ not found"
 fi
 
+# ─── 5b. Git Packages ─────────────────────────────────────────────────────────
+section "5b. Git Packages (~/.pi/agent/git/)"
+
+if [[ -d "$PI_AGENT_DIR/git" ]]; then
+  pkg_count=$(find "$PI_AGENT_DIR/git" -maxdepth 4 -name "package.json" 2>/dev/null | wc -l | tr -d ' ')
+  if [[ "$pkg_count" -ge 18 ]]; then
+    check_pass "Git packages: $pkg_count installed (✓ expect 18+)"
+  elif [[ "$pkg_count" -gt 0 ]]; then
+    check_warn "Git packages: $pkg_count installed (expected 18+) — run: pi update"
+  else
+    check_fail "Git packages: none found — run: pi update"
+  fi
+else
+  check_fail "~/.pi/agent/git/ not found — pi update has not been run"
+fi
+
 # ─── 6. Configuration ─────────────────────────────────────────────────────────
 section "6. Configuration"
 
