@@ -1,0 +1,588 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Helios + Pi Team Installer
+# =============================================================================
+# Installs: Pi CLI, Helios Agent, 20 git packages, extensions, Familiar skills,
+# API key setup, optional Memgraph via Docker
+# =============================================================================
+
+set -euo pipefail
+trap 'echo -e "\n${RED}✗ Installer interrupted. Run again to resume (idempotent).${RESET}"' EXIT
+
+# ─── Colors & Styles ─────────────────────────────────────────────────────────
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+BOLD='\033[1m'
+DIM='\033[2m'
+RESET='\033[0m'
+
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+info()    { echo -e "${BLUE}  ℹ ${RESET}$*"; }
+success() { echo -e "${GREEN}  ✓ ${RESET}$*"; }
+warn()    { echo -e "${YELLOW}  ⚠ ${RESET}$*"; }
+error()   { echo -e "${RED}  ✗ ${RESET}$*"; }
+step()    { echo -e "\n${BOLD}${CYAN}▶ $*${RESET}"; }
+ask()     { echo -en "${MAGENTA}  ? ${RESET}$* "; }
+
+INSTALLER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HELIOS_AGENT_REPO="github.com/sweetcheeks72/helios-agent"
+FAMILIAR_REPO="github.com/sweetcheeks72/familiar"  # NOTE: verify this URL
+PI_AGENT_DIR="$HOME/.pi/agent"
+FAMILIAR_DIR="$HOME/.familiar"
+LOG_FILE="$INSTALLER_DIR/install.log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+# ─── Banner ───────────────────────────────────────────────────────────────────
+print_banner() {
+  echo -e "${BOLD}${CYAN}"
+  cat << 'BANNER'
+  ╔═══════════════════════════════════════════════════════════════╗
+  ║                                                               ║
+  ║    ██╗  ██╗███████╗██╗     ██╗ ██████╗ ███████╗              ║
+  ║    ██║  ██║██╔════╝██║     ██║██╔═══██╗██╔════╝              ║
+  ║    ███████║█████╗  ██║     ██║██║   ██║███████╗              ║
+  ║    ██╔══██║██╔══╝  ██║     ██║██║   ██║╚════██║              ║
+  ║    ██║  ██║███████╗███████╗██║╚██████╔╝███████║              ║
+  ║    ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝ ╚═════╝ ╚══════╝              ║
+  ║                                                               ║
+  ║          Team Installer  •  Pi + Helios Orchestrator          ║
+  ║                                                               ║
+  ╚═══════════════════════════════════════════════════════════════╝
+BANNER
+  echo -e "${RESET}"
+  echo -e "  ${DIM}Log: $LOG_FILE${RESET}\n"
+}
+
+# ─── Progress Spinner ─────────────────────────────────────────────────────────
+spin_pid=""
+start_spinner() {
+  local msg="${1:-Working...}"
+  local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+  local i=0
+  while true; do
+    echo -ne "  ${CYAN}${frames[$i]}${RESET}  ${msg}\r"
+    i=$(( (i+1) % ${#frames[@]} ))
+    sleep 0.1
+  done &
+  spin_pid=$!
+  disown "$spin_pid" 2>/dev/null || true
+}
+
+stop_spinner() {
+  if [[ -n "$spin_pid" ]] && kill -0 "$spin_pid" 2>/dev/null; then
+    kill "$spin_pid" 2>/dev/null || true
+    wait "$spin_pid" 2>/dev/null || true
+    spin_pid=""
+  fi
+  echo -ne "\r\033[K"
+}
+
+run_with_spinner() {
+  local msg="$1"; shift
+  start_spinner "$msg"
+  if "$@" >> "$LOG_FILE" 2>&1; then
+    stop_spinner
+    success "$msg"
+    return 0
+  else
+    stop_spinner
+    error "$msg — see $LOG_FILE for details"
+    return 1
+  fi
+}
+
+# ─── Prerequisite Checks ──────────────────────────────────────────────────────
+check_prerequisites() {
+  step "Checking prerequisites"
+
+  local missing=()
+
+  # Node.js 18+
+  if command -v node &>/dev/null; then
+    local node_ver
+    node_ver=$(node -e "process.exit(parseInt(process.version.slice(1)) < 18 ? 1 : 0)" 2>/dev/null && node -e "console.log(process.version)" 2>/dev/null || echo "old")
+    if node -e "process.exit(parseInt(process.version.slice(1)) < 18 ? 1 : 0)" 2>/dev/null; then
+      success "Node.js $(node -v) ✓"
+    else
+      error "Node.js 18+ required (found: $(node -v))"
+      missing+=("node18+")
+    fi
+  else
+    error "Node.js not found"
+    missing+=("node")
+  fi
+
+  # npm
+  if command -v npm &>/dev/null; then
+    success "npm $(npm -v) ✓"
+  else
+    error "npm not found"
+    missing+=("npm")
+  fi
+
+  # git
+  if command -v git &>/dev/null; then
+    success "git $(git --version | awk '{print $3}') ✓"
+  else
+    error "git not found"
+    missing+=("git")
+  fi
+
+  # curl
+  if command -v curl &>/dev/null; then
+    success "curl ✓"
+  else
+    warn "curl not found — some features may be limited"
+  fi
+
+  # Docker (optional)
+  if command -v docker &>/dev/null; then
+    success "Docker $(docker --version | awk '{print $3}' | tr -d ',') ✓ (optional)"
+    DOCKER_AVAILABLE=true
+  else
+    info "Docker not found — Memgraph setup will be skipped (optional)"
+    DOCKER_AVAILABLE=false
+  fi
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    echo ""
+    error "Missing required prerequisites: ${missing[*]}"
+    echo ""
+    echo -e "  ${BOLD}Install guide:${RESET}"
+    echo -e "  • Node.js 18+: https://nodejs.org or ${DIM}brew install node${RESET}"
+    echo -e "  • git: ${DIM}brew install git${RESET} or ${DIM}apt install git${RESET}"
+    exit 1
+  fi
+}
+
+# ─── Pi Installation ──────────────────────────────────────────────────────────
+install_pi() {
+  step "Pi CLI"
+
+  if command -v pi &>/dev/null; then
+    local pi_ver
+    pi_ver=$(pi --version 2>/dev/null | head -1 || echo "unknown")
+    success "Pi already installed: $pi_ver"
+    PI_INSTALLED=true
+    return 0
+  fi
+
+  info "Pi not found — installing via npm..."
+  if run_with_spinner "Installing Pi CLI (@mariozechner/pi-coding-agent)" \
+      npm install -g @mariozechner/pi-coding-agent; then
+    PI_INSTALLED=true
+    success "Pi installed: $(pi --version 2>/dev/null | head -1 || echo 'ok')"
+  else
+    error "Failed to install Pi. Try manually: npm install -g @mariozechner/pi-coding-agent"
+    exit 1
+  fi
+}
+
+# ─── Helios Agent Repo ────────────────────────────────────────────────────────
+setup_helios_agent() {
+  step "Helios Agent (~/.pi/agent/)"
+
+  if [[ -d "$PI_AGENT_DIR" ]]; then
+    if [[ -d "$PI_AGENT_DIR/.git" ]]; then
+      info "~/.pi/agent/ already exists (git repo) — pulling latest"
+      run_with_spinner "Updating helios-agent" \
+        git -C "$PI_AGENT_DIR" pull --rebase --autostash || warn "Could not pull — continuing with existing version"
+      return 0
+    elif [[ -L "$PI_AGENT_DIR" ]]; then
+      info "~/.pi/agent/ is a symlink to: $(readlink "$PI_AGENT_DIR")"
+      return 0
+    else
+      warn "~/.pi/agent/ exists but is not a git repo — backing up and re-cloning"
+      mv "$PI_AGENT_DIR" "${PI_AGENT_DIR}.backup.$(date +%Y%m%d_%H%M%S)"
+    fi
+  fi
+
+  mkdir -p "$HOME/.pi"
+  run_with_spinner "Cloning helios-agent → ~/.pi/agent/" \
+    git clone "https://$HELIOS_AGENT_REPO.git" "$PI_AGENT_DIR"
+  success "Helios agent cloned to $PI_AGENT_DIR"
+}
+
+# ─── Pi Update (Install Packages) ─────────────────────────────────────────────
+install_packages() {
+  step "Installing Pi packages (pi update)"
+  info "This installs all 20 git packages — may take 2-3 minutes"
+
+  if [[ ! -f "$PI_AGENT_DIR/settings.json" ]]; then
+    warn "settings.json not found — provider selection may have failed. Using Anthropic default."
+    cp "$INSTALLER_DIR/provider-configs/anthropic.json" "$PI_AGENT_DIR/settings.json"
+  fi
+
+  run_with_spinner "Running pi update (installing packages)" \
+    pi update || {
+    warn "pi update had issues — packages may need manual installation"
+    return 0
+  }
+  success "Pi packages installed"
+}
+
+# ─── Provider Selection ───────────────────────────────────────────────────────
+select_provider() {
+  step "AI Provider Selection"
+
+  echo ""
+  echo -e "  ${BOLD}Choose your primary AI provider:${RESET}"
+  echo ""
+  echo -e "  ${CYAN}1)${RESET} ${BOLD}Anthropic Direct${RESET}        (claude-sonnet-4-5, claude-opus-4)"
+  echo -e "     ${DIM}Best for: Getting started quickly. Pay-per-use API.${RESET}"
+  echo ""
+  echo -e "  ${CYAN}2)${RESET} ${BOLD}Amazon Bedrock${RESET}           (claude-opus-4, claude-sonnet-4-5 via AWS)"
+  echo -e "     ${DIM}Best for: Enterprise, existing AWS accounts, regional compliance.${RESET}"
+  echo ""
+  echo -e "  ${CYAN}3)${RESET} ${BOLD}OpenAI${RESET}                   (gpt-5.2, gpt-4o)"
+  echo -e "     ${DIM}Best for: OpenAI preference, GPT models.${RESET}"
+  echo ""
+  ask "Selection [1-3] (default: 1):"
+  read -r provider_choice
+  provider_choice="${provider_choice:-1}"
+
+  case "$provider_choice" in
+    1)
+      SELECTED_PROVIDER="anthropic"
+      SELECTED_MODEL="claude-sonnet-4-5-20250514"
+      PROVIDER_CONFIG="$INSTALLER_DIR/provider-configs/anthropic.json"
+      success "Selected: Anthropic Direct (claude-sonnet-4-5)"
+      ;;
+    2)
+      SELECTED_PROVIDER="amazon-bedrock"
+      SELECTED_MODEL="us.anthropic.claude-opus-4-6-v1"
+      PROVIDER_CONFIG="$INSTALLER_DIR/provider-configs/bedrock.json"
+      success "Selected: Amazon Bedrock (claude-opus-4)"
+      warn "Make sure AWS CLI is configured: aws configure"
+      ;;
+    3)
+      SELECTED_PROVIDER="openai"
+      SELECTED_MODEL="gpt-5.2"
+      PROVIDER_CONFIG="$INSTALLER_DIR/provider-configs/openai.json"
+      success "Selected: OpenAI (gpt-5.2)"
+      ;;
+    *)
+      warn "Invalid selection — defaulting to Anthropic"
+      SELECTED_PROVIDER="anthropic"
+      SELECTED_MODEL="claude-sonnet-4-5-20250514"
+      PROVIDER_CONFIG="$INSTALLER_DIR/provider-configs/anthropic.json"
+      ;;
+  esac
+
+  # Apply provider config
+  cp "$PROVIDER_CONFIG" "$PI_AGENT_DIR/settings.json"
+  success "settings.json configured for $SELECTED_PROVIDER"
+}
+
+# ─── API Key Setup ────────────────────────────────────────────────────────────
+setup_api_keys() {
+  step "API Key Setup"
+
+  local env_file="$PI_AGENT_DIR/.env"
+  local env_template="$INSTALLER_DIR/.env.template"
+
+  # Load existing .env if present
+  if [[ -f "$env_file" ]]; then
+    info ".env already exists — updating only empty values"
+  else
+    cp "$env_template" "$env_file"
+    info "Created .env from template"
+  fi
+
+  echo ""
+  echo -e "  ${BOLD}API Keys${RESET} ${DIM}(press Enter to skip and fill in later)${RESET}"
+  echo ""
+
+  # Helper: prompt for key if not already set
+  prompt_key() {
+    local key_name="$1"
+    local description="$2"
+    local required="${3:-optional}"
+    local current_val
+    current_val=$(grep "^${key_name}=" "$env_file" 2>/dev/null | cut -d'=' -f2- || echo "")
+
+    if [[ -n "$current_val" ]]; then
+      info "$key_name already set — skipping"
+      return
+    fi
+
+    local label="${GREEN}[required]${RESET}"
+    [[ "$required" == "optional" ]] && label="${DIM}[optional]${RESET}"
+    [[ "$required" == "recommended" ]] && label="${YELLOW}[recommended]${RESET}"
+
+    ask "$key_name $label — $description:"
+    read -rs key_val
+    echo ""  # newline after silent read
+
+    if [[ -n "$key_val" ]]; then
+      # Update the env file (replace the empty key= line)
+      if grep -q "^${key_name}=" "$env_file"; then
+        sed -i.bak "s|^${key_name}=.*|${key_name}=${key_val}|" "$env_file"
+        rm -f "${env_file}.bak"
+      else
+        echo "${key_name}=${key_val}" >> "$env_file"
+      fi
+      success "$key_name saved"
+    else
+      warn "$key_name skipped — add to $env_file later"
+    fi
+  }
+
+  # Provider-specific required key
+  case "$SELECTED_PROVIDER" in
+    anthropic)
+      prompt_key "ANTHROPIC_API_KEY" "from console.anthropic.com/api-keys" "required"
+      ;;
+    amazon-bedrock)
+      prompt_key "AWS_ACCESS_KEY_ID" "from AWS IAM Console" "required"
+      prompt_key "AWS_SECRET_ACCESS_KEY" "from AWS IAM Console" "required"
+      echo ""
+      ask "AWS_DEFAULT_REGION (default: us-east-1):"
+      read -r aws_region
+      aws_region="${aws_region:-us-east-1}"
+      sed -i.bak "s|^AWS_DEFAULT_REGION=.*|AWS_DEFAULT_REGION=${aws_region}|" "$env_file"
+      rm -f "${env_file}.bak"
+      ;;
+    openai)
+      prompt_key "OPENAI_API_KEY" "from platform.openai.com/api-keys" "required"
+      ;;
+  esac
+
+  echo ""
+  echo -e "  ${DIM}Additional keys (optional but recommended):${RESET}"
+  prompt_key "GITHUB_TOKEN" "github.com/settings/tokens (for PR review MCP)" "recommended"
+  prompt_key "GROQ_API_KEY" "for transcription/Whisper (console.groq.com)" "optional"
+  prompt_key "FIGMA_MCP_TOKEN" "for Figma MCP server (figma.com → Account → API tokens)" "optional"
+  prompt_key "ANTHROPIC_API_KEY" "for fallback if primary is Bedrock/OpenAI" "optional"
+
+  success ".env configured at $env_file"
+}
+
+# ─── Familiar Skills ──────────────────────────────────────────────────────────
+setup_familiar() {
+  step "Familiar Skills (optional)"
+
+  echo ""
+  ask "Install Familiar skills? (Gmail, Calendar, Drive, transcription) [y/N]:"
+  read -r install_familiar
+  install_familiar="${install_familiar:-n}"
+
+  if [[ ! "$install_familiar" =~ ^[Yy]$ ]]; then
+    info "Skipping Familiar setup"
+    return 0
+  fi
+
+  if [[ -d "$FAMILIAR_DIR" ]]; then
+    if [[ -d "$FAMILIAR_DIR/.git" ]]; then
+      info "~/.familiar/ already exists — pulling latest"
+      run_with_spinner "Updating familiar" \
+        git -C "$FAMILIAR_DIR" pull --rebase --autostash || warn "Could not pull familiar"
+      return 0
+    fi
+  fi
+
+  info "Cloning Familiar → ~/.familiar/"
+  warn "NOTE: Verify the Familiar repo URL before proceeding."
+  warn "Assumed URL: https://$FAMILIAR_REPO.git"
+  echo ""
+  ask "Proceed with clone? [y/N]:"
+  read -r confirm_familiar
+  if [[ ! "$confirm_familiar" =~ ^[Yy]$ ]]; then
+    warn "Familiar setup skipped"
+    return 0
+  fi
+
+  run_with_spinner "Cloning familiar → ~/.familiar/" \
+    git clone "https://$FAMILIAR_REPO.git" "$FAMILIAR_DIR" || {
+    warn "Could not clone Familiar — check the URL and your GitHub access"
+    return 0
+  }
+  success "Familiar cloned to $FAMILIAR_DIR"
+}
+
+# ─── Memgraph via Docker ──────────────────────────────────────────────────────
+setup_memgraph() {
+  step "Memgraph (optional)"
+
+  if [[ "$DOCKER_AVAILABLE" != "true" ]]; then
+    info "Docker not available — skipping Memgraph setup"
+    return 0
+  fi
+
+  echo ""
+  ask "Set up Memgraph (knowledge graph for session memory)? [y/N]:"
+  read -r install_memgraph
+  install_memgraph="${install_memgraph:-n}"
+
+  if [[ ! "$install_memgraph" =~ ^[Yy]$ ]]; then
+    info "Skipping Memgraph setup"
+    return 0
+  fi
+
+  local compose_file="$INSTALLER_DIR/docker-compose.memgraph.yml"
+
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "helios-memgraph"; then
+    success "Memgraph container already running"
+    return 0
+  fi
+
+  run_with_spinner "Starting Memgraph container" \
+    docker compose -f "$compose_file" up -d
+
+  # Update .env with Memgraph settings
+  local env_file="$PI_AGENT_DIR/.env"
+  sed -i.bak \
+    -e 's|^MEMGRAPH_HOST=.*|MEMGRAPH_HOST=127.0.0.1|' \
+    -e 's|^MEMGRAPH_PORT=.*|MEMGRAPH_PORT=7687|' \
+    "$env_file" 2>/dev/null || true
+  rm -f "${env_file}.bak"
+
+  info "Memgraph: bolt://localhost:7687"
+  info "Memgraph Lab: http://localhost:7444"
+  success "Memgraph started"
+}
+
+# ─── Verification ─────────────────────────────────────────────────────────────
+run_verification() {
+  step "Verification"
+
+  local all_ok=true
+
+  # Pi responds
+  if command -v pi &>/dev/null; then
+    success "pi binary found: $(which pi)"
+  else
+    error "pi binary not in PATH"
+    all_ok=false
+  fi
+
+  # Agent dir
+  if [[ -d "$PI_AGENT_DIR" ]]; then
+    success "~/.pi/agent/ exists"
+  else
+    error "~/.pi/agent/ not found"
+    all_ok=false
+  fi
+
+  # Count agents
+  local agent_count=0
+  if [[ -d "$PI_AGENT_DIR/agents" ]]; then
+    agent_count=$(find "$PI_AGENT_DIR/agents" -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
+    if [[ "$agent_count" -ge 40 ]]; then
+      success "Agents: $agent_count (expect 40+)"
+    else
+      warn "Agents: $agent_count (expected 40+) — packages may not be fully installed"
+    fi
+  fi
+
+  # Count skills
+  local skill_count=0
+  skill_count=$(find "$PI_AGENT_DIR/skills" "$FAMILIAR_DIR/skills" -name "SKILL.md" 2>/dev/null | wc -l | tr -d ' ')
+  if [[ "$skill_count" -ge 13 ]]; then
+    success "Skills: $skill_count (expect 13+)"
+  else
+    warn "Skills: $skill_count (expected 13+)"
+  fi
+
+  # Count extensions
+  local ext_count=0
+  if [[ -d "$PI_AGENT_DIR/extensions" ]]; then
+    ext_count=$(find "$PI_AGENT_DIR/extensions" -name "*.js" -o -name "index.ts" 2>/dev/null | wc -l | tr -d ' ')
+    success "Extensions: found in ~/.pi/agent/extensions/"
+  fi
+
+  # .env has at least one key set
+  local env_file="$PI_AGENT_DIR/.env"
+  if [[ -f "$env_file" ]]; then
+    local keys_set
+    keys_set=$(grep -v '^#' "$env_file" 2>/dev/null | grep -v '^$' | grep -v '=$' | wc -l | tr -d ' ')
+    if [[ "$keys_set" -gt 0 ]]; then
+      success ".env: $keys_set key(s) configured"
+    else
+      warn ".env exists but no keys are set — add at least one API key"
+    fi
+  else
+    warn ".env not found at $env_file"
+  fi
+
+  # settings.json
+  if [[ -f "$PI_AGENT_DIR/settings.json" ]]; then
+    local configured_provider
+    configured_provider=$(python3 -c "import json; d=json.load(open('$PI_AGENT_DIR/settings.json')); print(d.get('defaultProvider','?'))" 2>/dev/null || echo "?")
+    success "settings.json: provider=$configured_provider"
+  fi
+
+  echo ""
+  if [[ "$all_ok" == "true" ]]; then
+    echo -e "  ${GREEN}${BOLD}✓ Verification passed${RESET}"
+  else
+    echo -e "  ${YELLOW}${BOLD}⚠ Verification completed with warnings — see above${RESET}"
+  fi
+}
+
+# ─── Quick-Start Guide ────────────────────────────────────────────────────────
+print_quickstart() {
+  echo ""
+  echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+  echo -e "${BOLD}${GREEN}  ✓ Helios + Pi Installation Complete!${RESET}"
+  echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+  echo ""
+  echo -e "  ${BOLD}Quick Start:${RESET}"
+  echo ""
+  echo -e "    ${CYAN}1.${RESET} Open your project directory:"
+  echo -e "       ${DIM}cd /path/to/your/project${RESET}"
+  echo ""
+  echo -e "    ${CYAN}2.${RESET} Start Helios:"
+  echo -e "       ${DIM}pi${RESET}"
+  echo ""
+  echo -e "    ${CYAN}3.${RESET} Try a task:"
+  echo -e "       ${DIM}\"Review my code and create a PR\"${RESET}"
+  echo -e "       ${DIM}\"Plan and implement user authentication\"${RESET}"
+  echo ""
+  echo -e "  ${BOLD}Key Files:${RESET}"
+  echo -e "    ${DIM}~/.pi/agent/.env${RESET}          — API keys (edit to add/change)"
+  echo -e "    ${DIM}~/.pi/agent/settings.json${RESET} — Provider/model config"
+  echo -e "    ${DIM}~/.pi/agent/agents/${RESET}        — Agent definitions"
+  echo -e "    ${DIM}~/.pi/agent/skills/${RESET}        — Skill definitions"
+  echo ""
+  echo -e "  ${BOLD}Useful Commands:${RESET}"
+  echo -e "    ${DIM}pi update${RESET}               — Update all packages"
+  echo -e "    ${DIM}pi --help${RESET}               — Show Pi CLI help"
+  echo -e "    ${DIM}bash $INSTALLER_DIR/verify.sh${RESET}   — Run health check"
+  echo -e "    ${DIM}bash $INSTALLER_DIR/uninstall.sh${RESET} — Uninstall"
+  echo ""
+  echo -e "  ${BOLD}Troubleshooting:${RESET}  ${DIM}See $INSTALLER_DIR/README.md${RESET}"
+  echo ""
+  if [[ -f "$PI_AGENT_DIR/.env" ]]; then
+    local keys_missing
+    keys_missing=$(grep -c '^[A-Z_]*=$' "$PI_AGENT_DIR/.env" 2>/dev/null || echo 0)
+    if [[ "$keys_missing" -gt 0 ]]; then
+      echo -e "  ${YELLOW}⚠ ${keys_missing} API key(s) not yet set. Edit: ${DIM}~/.pi/agent/.env${RESET}"
+    fi
+  fi
+  echo ""
+}
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
+main() {
+  print_banner
+  check_prerequisites
+  install_pi
+  setup_helios_agent
+  select_provider       # Provider BEFORE packages — pi update reads settings.json
+  install_packages
+  setup_api_keys
+  setup_familiar
+  setup_memgraph
+  run_verification
+  print_quickstart
+
+  # Ensure installer exit trap doesn't print error message on clean exit
+  trap - EXIT
+}
+
+main "$@"

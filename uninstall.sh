@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Helios + Pi Uninstaller
+# =============================================================================
+# Safely removes the Helios + Pi setup with confirmation prompts.
+# Does NOT remove API keys from shell profiles.
+# =============================================================================
+
+set -uo pipefail
+
+# ─── Colors ───────────────────────────────────────────────────────────────────
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+RESET='\033[0m'
+
+info()    { echo -e "${CYAN}  ℹ ${RESET}$*"; }
+success() { echo -e "${GREEN}  ✓ ${RESET}$*"; }
+warn()    { echo -e "${YELLOW}  ⚠ ${RESET}$*"; }
+error()   { echo -e "${RED}  ✗ ${RESET}$*"; }
+ask()     { echo -en "${YELLOW}  ? ${RESET}$* "; }
+
+PI_AGENT_DIR="$HOME/.pi/agent"
+FAMILIAR_DIR="$HOME/.familiar"
+PI_DIR="$HOME/.pi"
+
+# ─── Banner ───────────────────────────────────────────────────────────────────
+echo ""
+echo -e "${BOLD}${RED}  ╔═══════════════════════════════════════════╗${RESET}"
+echo -e "${BOLD}${RED}  ║    Helios + Pi Uninstaller                ║${RESET}"
+echo -e "${BOLD}${RED}  ╚═══════════════════════════════════════════╝${RESET}"
+echo ""
+echo -e "  ${YELLOW}This will remove the Helios + Pi setup.${RESET}"
+echo -e "  ${DIM}Your API keys in shell profiles will NOT be removed.${RESET}"
+echo ""
+
+# ─── Master Confirmation ──────────────────────────────────────────────────────
+ask "Are you sure you want to uninstall? [y/N]:"
+read -r confirm
+if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+  echo ""
+  info "Uninstall cancelled"
+  exit 0
+fi
+
+echo ""
+
+# ─── 1. Remove ~/.pi/agent/ ───────────────────────────────────────────────────
+if [[ -d "$PI_AGENT_DIR" || -L "$PI_AGENT_DIR" ]]; then
+  echo -e "  ${BOLD}~/.pi/agent/${RESET}"
+  if [[ -L "$PI_AGENT_DIR" ]]; then
+    info "~/.pi/agent/ is a symlink → $(readlink "$PI_AGENT_DIR")"
+  fi
+
+  ask "Remove ~/.pi/agent/ (Helios agent, configs, skills)? [y/N]:"
+  read -r remove_agent
+  if [[ "$remove_agent" =~ ^[Yy]$ ]]; then
+    # Backup .env first
+    if [[ -f "$PI_AGENT_DIR/.env" ]]; then
+      env_backup="$HOME/.pi-agent-env.backup.$(date +%Y%m%d_%H%M%S)"
+      cp "$PI_AGENT_DIR/.env" "$env_backup"
+      success "API keys backed up to: $env_backup"
+    fi
+    rm -rf "$PI_AGENT_DIR"
+    success "~/.pi/agent/ removed"
+  else
+    info "Keeping ~/.pi/agent/"
+  fi
+fi
+
+# ─── 2. Remove ~/.pi/ (packages cache etc.) ───────────────────────────────────
+if [[ -d "$PI_DIR" ]]; then
+  ask "Remove entire ~/.pi/ directory (packages cache)? [y/N]:"
+  read -r remove_pi_dir
+  if [[ "$remove_pi_dir" =~ ^[Yy]$ ]]; then
+    rm -rf "$PI_DIR"
+    success "~/.pi/ removed"
+  else
+    info "Keeping ~/.pi/"
+  fi
+fi
+
+# ─── 3. Remove Pi CLI ─────────────────────────────────────────────────────────
+if command -v pi &>/dev/null; then
+  ask "Remove Pi CLI (npm uninstall -g @mariozechner/pi-coding-agent)? [y/N]:"
+  read -r remove_pi_cli
+  if [[ "$remove_pi_cli" =~ ^[Yy]$ ]]; then
+    if npm uninstall -g @mariozechner/pi-coding-agent 2>/dev/null; then
+      success "Pi CLI removed"
+    else
+      warn "Could not remove Pi CLI automatically — run: npm uninstall -g @mariozechner/pi-coding-agent"
+    fi
+  else
+    info "Keeping Pi CLI"
+  fi
+fi
+
+# ─── 4. Remove Familiar Skills ────────────────────────────────────────────────
+if [[ -d "$FAMILIAR_DIR" ]]; then
+  ask "Remove ~/.familiar/ (Familiar skills)? [y/N]:"
+  read -r remove_familiar
+  if [[ "$remove_familiar" =~ ^[Yy]$ ]]; then
+    rm -rf "$FAMILIAR_DIR"
+    success "~/.familiar/ removed"
+  else
+    info "Keeping ~/.familiar/"
+  fi
+fi
+
+# ─── 5. Remove Docker Containers ──────────────────────────────────────────────
+if command -v docker &>/dev/null; then
+  if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "helios-memgraph"; then
+    ask "Stop and remove Memgraph Docker container(s)? [y/N]:"
+    read -r remove_docker
+    if [[ "$remove_docker" =~ ^[Yy]$ ]]; then
+      ask "  Also remove Memgraph data volume? [y/N]:"
+      read -r remove_volume
+
+      docker stop helios-memgraph 2>/dev/null || true
+      docker rm helios-memgraph 2>/dev/null || true
+      docker stop helios-memgraph-lab 2>/dev/null || true
+      docker rm helios-memgraph-lab 2>/dev/null || true
+      success "Memgraph containers removed"
+
+      if [[ "$remove_volume" =~ ^[Yy]$ ]]; then
+        docker volume rm helios-memgraph-data 2>/dev/null || true
+        success "Memgraph data volume removed"
+      else
+        info "Memgraph data volume kept (helios-memgraph-data)"
+      fi
+    else
+      info "Keeping Docker containers"
+    fi
+  fi
+fi
+
+# ─── 6. Shell Profile Note ────────────────────────────────────────────────────
+echo ""
+echo -e "  ${BOLD}Note on API Keys:${RESET}"
+echo -e "  ${DIM}API keys set in shell profiles (e.g., ~/.zshrc, ~/.bashrc) were NOT removed.${RESET}"
+echo -e "  ${DIM}To remove them manually, search for ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.${RESET}"
+if [[ -f "$HOME/.pi-agent-env.backup."* ]] 2>/dev/null; then
+  echo -e "  ${DIM}Your .env was backed up — find it with: ls ~/.pi-agent-env.backup.*${RESET}"
+fi
+
+# ─── Done ─────────────────────────────────────────────────────────────────────
+echo ""
+echo -e "  ${GREEN}${BOLD}✓ Uninstall complete${RESET}"
+echo ""
+echo -e "  ${DIM}To reinstall: bash ~/helios-team-installer/install.sh${RESET}"
+echo ""

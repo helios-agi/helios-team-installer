@@ -1,0 +1,276 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Helios + Pi Post-Install Verification
+# =============================================================================
+# Run after install.sh to verify everything is correctly set up.
+# Prints a health report card.
+# =============================================================================
+
+set -uo pipefail
+
+# ─── Colors ───────────────────────────────────────────────────────────────────
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+RESET='\033[0m'
+
+PI_AGENT_DIR="$HOME/.pi/agent"
+FAMILIAR_DIR="$HOME/.familiar"
+
+PASS=0
+WARN=0
+FAIL=0
+
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+check_pass() { echo -e "  ${GREEN}✓${RESET} $*"; ((PASS++)) || true; }
+check_warn() { echo -e "  ${YELLOW}⚠${RESET} $*"; ((WARN++)) || true; }
+check_fail() { echo -e "  ${RED}✗${RESET} $*"; ((FAIL++)) || true; }
+section()    { echo -e "\n  ${BOLD}${CYAN}$*${RESET}"; }
+
+# ─── Banner ───────────────────────────────────────────────────────────────────
+echo ""
+echo -e "${BOLD}${CYAN}  ╔══════════════════════════════════════════╗${RESET}"
+echo -e "${BOLD}${CYAN}  ║    Helios + Pi — Health Report Card      ║${RESET}"
+echo -e "${BOLD}${CYAN}  ╚══════════════════════════════════════════╝${RESET}"
+echo ""
+
+# ─── 1. Core Binaries ─────────────────────────────────────────────────────────
+section "1. Core Binaries"
+
+if command -v pi &>/dev/null; then
+  pi_ver=$(pi --version 2>/dev/null | head -1 || echo "unknown")
+  check_pass "pi binary: $pi_ver ($(which pi))"
+else
+  check_fail "pi binary not found — run: npm install -g @mariozechner/pi-coding-agent"
+fi
+
+if command -v node &>/dev/null; then
+  check_pass "node: $(node -v)"
+else
+  check_fail "node not found"
+fi
+
+if command -v git &>/dev/null; then
+  check_pass "git: $(git --version | awk '{print $3}')"
+else
+  check_fail "git not found"
+fi
+
+if command -v docker &>/dev/null; then
+  check_pass "docker: $(docker --version | awk '{print $3}' | tr -d ',')"
+else
+  check_warn "docker not found — Memgraph requires Docker (optional)"
+fi
+
+# ─── 2. Agent Directory ───────────────────────────────────────────────────────
+section "2. Agent Directory (~/.pi/agent/)"
+
+if [[ -d "$PI_AGENT_DIR" ]]; then
+  check_pass "~/.pi/agent/ exists"
+  if [[ -L "$PI_AGENT_DIR" ]]; then
+    check_pass "~/.pi/agent/ is a symlink → $(readlink "$PI_AGENT_DIR")"
+  elif [[ -d "$PI_AGENT_DIR/.git" ]]; then
+    git_branch=$(git -C "$PI_AGENT_DIR" branch --show-current 2>/dev/null || echo "?")
+    git_commit=$(git -C "$PI_AGENT_DIR" rev-parse --short HEAD 2>/dev/null || echo "?")
+    check_pass "git repo: branch=$git_branch commit=$git_commit"
+  fi
+else
+  check_fail "~/.pi/agent/ not found — run install.sh"
+fi
+
+# Expected subdirs
+for dir in agents skills extensions; do
+  if [[ -d "$PI_AGENT_DIR/$dir" ]]; then
+    count=$(find "$PI_AGENT_DIR/$dir" -maxdepth 3 -type f 2>/dev/null | wc -l | tr -d ' ')
+    check_pass "~/.pi/agent/$dir/ — $count files"
+  else
+    check_warn "~/.pi/agent/$dir/ not found"
+  fi
+done
+
+# ─── 3. Agents ────────────────────────────────────────────────────────────────
+section "3. Agents"
+
+if [[ -d "$PI_AGENT_DIR/agents" ]]; then
+  agent_count=$(find "$PI_AGENT_DIR/agents" -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
+  if [[ "$agent_count" -ge 40 ]]; then
+    check_pass "Agents: $agent_count (✓ expect 40+)"
+  elif [[ "$agent_count" -ge 20 ]]; then
+    check_warn "Agents: $agent_count (expected 40+) — run: pi update"
+  else
+    check_fail "Agents: $agent_count (expected 40+) — packages may not be installed"
+  fi
+
+  # Check critical agents
+  for agent in helios-system worker scout planner reviewer verifier; do
+    if find "$PI_AGENT_DIR/agents" -name "${agent}.md" 2>/dev/null | grep -q .; then
+      check_pass "Agent exists: $agent"
+    else
+      check_warn "Agent missing: $agent"
+    fi
+  done
+else
+  check_fail "~/.pi/agent/agents/ not found"
+fi
+
+# ─── 4. Skills ────────────────────────────────────────────────────────────────
+section "4. Skills"
+
+skill_count=0
+if [[ -d "$PI_AGENT_DIR/skills" ]]; then
+  pi_skills=$(find "$PI_AGENT_DIR/skills" -name "SKILL.md" 2>/dev/null | wc -l | tr -d ' ')
+  skill_count=$((skill_count + pi_skills))
+  check_pass "Pi skills: $pi_skills"
+fi
+
+if [[ -d "$FAMILIAR_DIR/skills" ]]; then
+  fam_skills=$(find "$FAMILIAR_DIR/skills" -name "SKILL.md" 2>/dev/null | wc -l | tr -d ' ')
+  skill_count=$((skill_count + fam_skills))
+  check_pass "Familiar skills: $fam_skills"
+else
+  check_warn "Familiar skills not found (~/.familiar/skills/) — optional"
+fi
+
+if [[ "$skill_count" -ge 13 ]]; then
+  check_pass "Total skills: $skill_count (✓ expect 13+)"
+elif [[ "$skill_count" -gt 0 ]]; then
+  check_warn "Total skills: $skill_count (expected 13+)"
+else
+  check_fail "No skills found"
+fi
+
+# ─── 5. Extensions ────────────────────────────────────────────────────────────
+section "5. Extensions"
+
+if [[ -d "$PI_AGENT_DIR/extensions" ]]; then
+  ext_dirs=$(find "$PI_AGENT_DIR/extensions" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+  if [[ "$ext_dirs" -ge 5 ]]; then
+    check_pass "Extensions: $ext_dirs directories (✓ expect 5+)"
+  else
+    check_warn "Extensions: $ext_dirs (expected 5)"
+  fi
+  # List them
+  while IFS= read -r ext_dir; do
+    ext_name=$(basename "$ext_dir")
+    check_pass "  Extension: $ext_name"
+  done < <(find "$PI_AGENT_DIR/extensions" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+else
+  check_warn "~/.pi/agent/extensions/ not found"
+fi
+
+# ─── 6. Configuration ─────────────────────────────────────────────────────────
+section "6. Configuration"
+
+env_file="$PI_AGENT_DIR/.env"
+if [[ -f "$env_file" ]]; then
+  check_pass ".env file exists"
+  
+  # Check for required keys based on provider
+  provider=$(python3 -c "import json; d=json.load(open('$PI_AGENT_DIR/settings.json')); print(d.get('defaultProvider','?'))" 2>/dev/null || echo "?")
+  
+  check_key() {
+    local key="$1"
+    local label="${2:-$1}"
+    local val
+    val=$(grep "^${key}=" "$env_file" 2>/dev/null | cut -d'=' -f2- || echo "")
+    if [[ -n "$val" ]]; then
+      check_pass "$label: set (${#val} chars)"
+    else
+      check_warn "$label: NOT SET — add to ~/.pi/agent/.env"
+    fi
+  }
+
+  case "$provider" in
+    anthropic)         check_key "ANTHROPIC_API_KEY" "Anthropic API key" ;;
+    amazon-bedrock)    check_key "AWS_ACCESS_KEY_ID" "AWS Access Key ID"
+                       check_key "AWS_SECRET_ACCESS_KEY" "AWS Secret Access Key" ;;
+    openai)            check_key "OPENAI_API_KEY" "OpenAI API key" ;;
+    *)                 check_warn "Could not determine provider from settings.json" ;;
+  esac
+
+  check_key "GITHUB_TOKEN" "GitHub token (recommended)"
+else
+  check_fail ".env not found at $env_file — run install.sh or create manually"
+fi
+
+if [[ -f "$PI_AGENT_DIR/settings.json" ]]; then
+  provider=$(python3 -c "import json; d=json.load(open('$PI_AGENT_DIR/settings.json')); print(d.get('defaultProvider','?'))" 2>/dev/null || echo "?")
+  model=$(python3 -c "import json; d=json.load(open('$PI_AGENT_DIR/settings.json')); print(d.get('defaultModel','?'))" 2>/dev/null || echo "?")
+  pkg_count=$(python3 -c "import json; d=json.load(open('$PI_AGENT_DIR/settings.json')); print(len(d.get('packages',[])))" 2>/dev/null || echo "?")
+  check_pass "settings.json: provider=$provider, model=$model, packages=$pkg_count"
+else
+  check_fail "settings.json not found in $PI_AGENT_DIR"
+fi
+
+# ─── 7. MCP Servers ───────────────────────────────────────────────────────────
+section "7. MCP Servers"
+
+# GitHub MCP
+if command -v npx &>/dev/null; then
+  if npm list -g @modelcontextprotocol/server-github &>/dev/null 2>&1; then
+    check_pass "GitHub MCP server installed"
+  else
+    check_warn "GitHub MCP server not installed (optional)"
+  fi
+fi
+
+# Figma MCP
+figma_token=$(grep "^FIGMA_MCP_TOKEN=" "$env_file" 2>/dev/null | cut -d'=' -f2- || echo "")
+if [[ -n "$figma_token" ]]; then
+  check_pass "Figma MCP token configured"
+else
+  check_warn "Figma MCP token not set (optional)"
+fi
+
+# ─── 8. Memgraph ──────────────────────────────────────────────────────────────
+section "8. Memgraph (optional)"
+
+if command -v docker &>/dev/null; then
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "helios-memgraph"; then
+    check_pass "Memgraph container: running"
+    
+    # Test Bolt connection
+    if command -v nc &>/dev/null; then
+      if nc -z 127.0.0.1 7687 2>/dev/null; then
+        check_pass "Memgraph Bolt port 7687: reachable"
+      else
+        check_fail "Memgraph Bolt port 7687: unreachable"
+      fi
+    fi
+  else
+    check_warn "Memgraph container not running (optional)"
+    check_warn "Start with: docker compose -f ~/helios-team-installer/docker-compose.memgraph.yml up -d"
+  fi
+else
+  check_warn "Docker not available — Memgraph check skipped"
+fi
+
+# ─── Report Card ──────────────────────────────────────────────────────────────
+echo ""
+echo -e "  ${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+echo -e "  ${BOLD}  Report Card${RESET}"
+echo -e "  ${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+echo ""
+echo -e "    ${GREEN}✓ Passed: $PASS${RESET}"
+echo -e "    ${YELLOW}⚠ Warnings: $WARN${RESET}"
+echo -e "    ${RED}✗ Failed: $FAIL${RESET}"
+echo ""
+
+total=$((PASS + WARN + FAIL))
+if [[ "$FAIL" -eq 0 && "$WARN" -le 3 ]]; then
+  echo -e "  ${GREEN}${BOLD}  ✓ System healthy — ready to use Pi + Helios!${RESET}"
+  echo -e "  ${DIM}  Run: pi${RESET}"
+elif [[ "$FAIL" -eq 0 ]]; then
+  echo -e "  ${YELLOW}${BOLD}  ⚠ System functional with warnings${RESET}"
+  echo -e "  ${DIM}  Optional items are missing — see warnings above${RESET}"
+else
+  echo -e "  ${RED}${BOLD}  ✗ Setup incomplete — $FAIL check(s) failed${RESET}"
+  echo -e "  ${DIM}  Run: bash ~/helios-team-installer/install.sh${RESET}"
+fi
+echo ""
+
+exit "$FAIL"

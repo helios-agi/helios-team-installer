@@ -1,0 +1,44 @@
+# =============================================================================
+# Memgraph Knowledge Graph — Docker Compose
+# =============================================================================
+# Start:  docker compose -f docker-compose.memgraph.yml up -d
+# Stop:   docker compose -f docker-compose.memgraph.yml down
+# Logs:   docker compose -f docker-compose.memgraph.yml logs -f
+# Reset:  docker compose -f docker-compose.memgraph.yml down -v
+# =============================================================================
+
+services:
+  memgraph:
+    image: memgraph/memgraph-mage:3.8.0
+    container_name: helios-memgraph
+    ports:
+      - "7687:7687"   # Bolt protocol (used by Pi MCP server)
+      - "7444:7444"   # Memgraph Lab (web UI → http://localhost:7444)
+    volumes:
+      - memgraph-data:/var/lib/memgraph
+    restart: unless-stopped
+    environment:
+      - MEMGRAPH_USER=memgraph
+      - MEMGRAPH_PASSWORD=memgraph
+    healthcheck:
+      test: ["CMD", "mg_client", "--host", "localhost", "--port", "7687", "--run", "RETURN 1;"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  memgraph-lab:
+    image: memgraph/lab:latest
+    container_name: helios-memgraph-lab
+    ports:
+      - "3000:3000"   # Memgraph Lab UI → http://localhost:3000
+    depends_on:
+      - memgraph
+    environment:
+      - QUICK_CONNECT_MG_HOST=memgraph
+      - QUICK_CONNECT_MG_PORT=7687
+    restart: unless-stopped
+
+volumes:
+  memgraph-data:
+    name: helios-memgraph-data
