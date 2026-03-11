@@ -172,6 +172,20 @@ else
   check_fail "~/.pi/agent/git/ not found — pi update has not been run"
 fi
 
+# Check critical packages individually
+critical_pkgs=("pi-interview-tool" "visual-explainer" "pi-design-deck" "pi-subagents" "pi-web-access")
+missing_critical=()
+for pkg in "${critical_pkgs[@]}"; do
+  if [[ ! -d "$PI_AGENT_DIR/git/github.com/nicobailon/$pkg" ]]; then
+    missing_critical+=("$pkg")
+  fi
+done
+if [[ ${#missing_critical[@]} -gt 0 ]]; then
+  check_warn "Missing critical packages: ${missing_critical[*]} — run: cd ~/.pi/agent && git pull && pi update"
+else
+  check_pass "All critical packages present (interview, visual-explainer, design-deck, subagents, web-access)"
+fi
+
 # ─── 6. Configuration ─────────────────────────────────────────────────────────
 section "6. Configuration"
 

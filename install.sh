@@ -284,13 +284,31 @@ template_models = set(template.get('enabledModels', []))
 existing_models = set(existing.get('enabledModels', []))
 existing['enabledModels'] = sorted(list(existing_models | template_models))
 
-# Ensure skills paths exist
-if 'skills' not in existing:
-    existing['skills'] = template.get('skills', [])
+# Helper to normalize package/skill identifiers for comparison
+def pkg_key(p):
+    if isinstance(p, str):
+        return p
+    if isinstance(p, dict):
+        return p.get('name', p.get('source', str(p)))
+    return str(p)
 
-# Ensure packages exist (keep existing format — npm: prefix, object entries, etc.)
-if 'packages' not in existing:
-    existing['packages'] = template.get('packages', [])
+# Merge skills: add any from template not already present (additive union)
+template_skills = template.get('skills', [])
+existing_skills = existing.get('skills', [])
+existing_skill_keys = set(pkg_key(s) for s in existing_skills)
+for s in template_skills:
+    if pkg_key(s) not in existing_skill_keys:
+        existing_skills.append(s)
+existing['skills'] = existing_skills
+
+# Merge packages: add any from template not already present (additive union)
+template_pkgs = template.get('packages', [])
+existing_pkgs = existing.get('packages', [])
+existing_pkg_keys = set(pkg_key(p) for p in existing_pkgs)
+for p in template_pkgs:
+    if pkg_key(p) not in existing_pkg_keys:
+        existing_pkgs.append(p)
+existing['packages'] = existing_pkgs
 
 # Ensure other required keys
 existing.setdefault('enableSkillCommands', True)
