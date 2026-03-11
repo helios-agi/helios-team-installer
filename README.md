@@ -15,6 +15,8 @@ Or if you already have the repo:
 bash ~/helios-team-installer/install.sh
 ```
 
+📖 **First time?** Read the [full team setup guide](TEAM-SETUP.md) — explains everything from scratch.
+
 ---
 
 ## What This Installs
