@@ -2,21 +2,33 @@
 
 > One-command setup for the full Helios AI orchestrator stack on top of Pi CLI.
 
-## Quick Start
+## Install (first time)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh | bash
 ```
 
-Same command to update — it detects existing installs and skips the interactive prompts (provider, API keys). Just pulls latest code, updates extensions, refreshes deps and infrastructure.
-
-```bash
-# Or locally:
-bash ~/helios-team-installer/install.sh          # update (non-interactive)
-bash ~/helios-team-installer/install.sh --fresh   # re-run full setup
-```
+This walks you through provider selection, API keys, and installs everything: Pi CLI, Helios agents, extensions, packages, Memgraph, Ollama, and MCP servers.
 
 📖 **First time?** Read the [full team setup guide](TEAM-SETUP.md) — explains everything from scratch.
+
+## Update (existing install)
+
+```bash
+cd ~/.pi/agent && git pull && pi update
+```
+
+That's it — pulls the latest agents, skills, extensions, and governance from the repo, then updates all packages.
+
+**Alternative — full re-run** (also safe for updates):
+```bash
+# Same install command — auto-detects existing install, skips provider/key prompts
+curl -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh | bash
+
+# Or locally:
+bash ~/helios-team-installer/install.sh          # update (non-interactive)
+bash ~/helios-team-installer/install.sh --fresh   # re-run full setup (re-prompts provider/keys)
+```
 
 ---
 
