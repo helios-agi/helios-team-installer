@@ -12,7 +12,7 @@ set -euo pipefail
 # When run via `curl ... | bash`, stdin is the pipe (EOF after script downloads).
 # Reopen stdin from /dev/tty so interactive `read` commands work.
 if [[ ! -t 0 ]] && [[ -e /dev/tty ]]; then
-  exec < /dev/tty
+  exec < /dev/tty || true
 fi
 
 cleanup() {
@@ -782,13 +782,13 @@ setup_memgraph() {
   # Check Docker
   if ! command -v docker &>/dev/null; then
     warn "Docker not installed — Memgraph will be skipped"
-    info "Install Docker Desktop: https://docs.docker.com/get-docker"
+    info "Install a container runtime (Docker Desktop, OrbStack, Colima): https://docs.docker.com/get-docker"
     info "Then re-run the installer to set up Memgraph"
     return 0
   fi
 
   if ! docker info &>/dev/null 2>&1; then
-    warn "Docker is installed but not running — start Docker Desktop"
+    warn "Docker is installed but not running — start your container runtime (Docker Desktop, OrbStack, etc.)"
     info "Then re-run the installer to set up Memgraph"
     return 0
   fi
@@ -1412,4 +1412,6 @@ main() {
   trap - EXIT
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

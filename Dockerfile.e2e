@@ -1,0 +1,58 @@
+# =============================================================================
+# Dockerfile.e2e — End-to-end test environment for helios-team-installer
+# =============================================================================
+# Ubuntu 24.04 base with all prerequisites for install.sh:
+#   curl, git, python3, sudo, nodejs (LTS)
+#
+# Usage:
+#   docker build -f Dockerfile.e2e -t helios-installer-e2e .
+#   docker run --rm helios-installer-e2e
+# =============================================================================
+
+FROM ubuntu:24.04
+
+# Avoid interactive prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# ─── System packages ──────────────────────────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      curl \
+      git \
+      python3 \
+      python3-pip \
+      sudo \
+      ca-certificates \
+      gnupg \
+      lsb-release \
+      bats \
+    && rm -rf /var/lib/apt/lists/*
+
+# ─── Node.js LTS (via NodeSource) ────────────────────────────────────────────
+RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# ─── Verify versions ──────────────────────────────────────────────────────────
+RUN echo "node: $(node -v)" \
+    && echo "npm: $(npm -v)" \
+    && echo "python3: $(python3 --version)" \
+    && echo "git: $(git --version)" \
+    && echo "curl: $(curl --version | head -1)"
+
+# ─── Create testuser with sudo access ─────────────────────────────────────────
+RUN useradd -m -s /bin/bash testuser \
+    && echo "testuser ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/testuser \
+    && chmod 0440 /etc/sudoers.d/testuser
+
+# ─── Copy installer into image ────────────────────────────────────────────────
+WORKDIR /helios-installer
+COPY . .
+RUN chmod +x install.sh \
+    && chmod +x tests/e2e_docker.sh 2>/dev/null || true
+
+# ─── Set testuser as runtime user ─────────────────────────────────────────────
+USER testuser
+WORKDIR /home/testuser
+
+# ─── Run E2E tests ────────────────────────────────────────────────────────────
+CMD ["/helios-installer/tests/e2e_docker.sh"]
