@@ -47,8 +47,7 @@ jobs:
         with:
           repository: sweetcheeks72/helios-agent
           path: helios-agent-src
-          # Use a deploy key or PAT if the repo is private:
-          # token: ${{ secrets.HELIOS_AGENT_READ_TOKEN }}
+          token: ${{ secrets.HELIOS_AGENT_READ_TOKEN }}
 
       - name: Install helios-agent to expected location
         run: |
