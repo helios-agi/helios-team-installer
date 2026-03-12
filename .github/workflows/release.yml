@@ -144,5 +144,7 @@ jobs:
             ${{ steps.artefacts.outputs.TARBALL }}
             ${{ steps.artefacts.outputs.CHECKSUM }}
             installer/dist/VERSION
+            installer/dist/helios-agent-latest.tar.gz
+            installer/dist/helios-agent-latest.tar.gz.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

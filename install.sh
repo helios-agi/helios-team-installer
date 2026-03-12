@@ -300,6 +300,26 @@ setup_helios_agent() {
       return 0
     fi
 
+    # Verify checksum
+    local tmp_checksum
+    tmp_checksum="$(mktemp)"
+    if _helios_download "$HELIOS_RELEASE_URL/$HELIOS_AGENT_TARBALL.sha256" "$tmp_checksum"; then
+      local expected_sha actual_sha
+      expected_sha="$(awk '{print $1}' "$tmp_checksum")"
+      if command -v sha256sum &>/dev/null; then
+        actual_sha="$(sha256sum "$tmp_tarball" | awk '{print $1}')"
+      elif command -v shasum &>/dev/null; then
+        actual_sha="$(shasum -a 256 "$tmp_tarball" | awk '{print $1}')"
+      fi
+      if [[ -n "$actual_sha" ]] && [[ "$actual_sha" != "$expected_sha" ]]; then
+        warn "SHA256 mismatch — aborting update"
+        rm -rf "$tmp_stash" "$tmp_tarball" "$tmp_checksum"
+        cp -a "$backup_dir" "$PI_AGENT_DIR"
+        return 0
+      fi
+    fi
+    rm -f "$tmp_checksum"
+
     rm -rf "$PI_AGENT_DIR"
     mkdir -p "$PI_AGENT_DIR"
     if ! tar -xzf "$tmp_tarball" -C "$PI_AGENT_DIR" --strip-components=1 2>>"$LOG_FILE"; then
@@ -345,6 +365,25 @@ setup_helios_agent() {
       rm -rf "$tmp_stash" "$tmp_tarball"
       return 0
     fi
+
+    # Verify checksum
+    local tmp_checksum
+    tmp_checksum="$(mktemp)"
+    if _helios_download "$HELIOS_RELEASE_URL/helios-agent-latest.tar.gz.sha256" "$tmp_checksum"; then
+      local expected_sha actual_sha
+      expected_sha="$(awk '{print $1}' "$tmp_checksum")"
+      if command -v sha256sum &>/dev/null; then
+        actual_sha="$(sha256sum "$tmp_tarball" | awk '{print $1}')"
+      elif command -v shasum &>/dev/null; then
+        actual_sha="$(shasum -a 256 "$tmp_tarball" | awk '{print $1}')"
+      fi
+      if [[ -n "$actual_sha" ]] && [[ "$actual_sha" != "$expected_sha" ]]; then
+        warn "SHA256 mismatch — aborting migration"
+        rm -rf "$tmp_stash" "$tmp_tarball" "$tmp_checksum"
+        return 0
+      fi
+    fi
+    rm -f "$tmp_checksum"
 
     # Replace git install with tarball
     rm -rf "$PI_AGENT_DIR"
@@ -995,13 +1034,10 @@ setup_api_keys() {
     echo ""  # newline after silent read
 
     if [[ -n "$key_val" ]]; then
-      # Update the env file (replace the empty key= line)
-      if grep -q "^${key_name}=" "$env_file"; then
-        sed -i.bak "s|^${key_name}=.*|${key_name}=\"${key_val}\"|" "$env_file"
-        rm -f "${env_file}.bak"
-      else
-        echo "${key_name}=${key_val}" >> "$env_file"
-      fi
+      # Update the env file safely (avoid shell injection from unescaped values)
+      grep -v "^${key_name}=" "$env_file" > "${env_file}.tmp" 2>/dev/null || true
+      printf '%s=%s\n' "${key_name}" "${key_val}" >> "${env_file}.tmp"
+      mv "${env_file}.tmp" "$env_file"
       success "$key_name saved"
     else
       warn "$key_name skipped — add to $env_file later"
@@ -1020,8 +1056,9 @@ setup_api_keys() {
       ask "AWS_DEFAULT_REGION (default: us-east-1):"
       read -r aws_region
       aws_region="${aws_region:-us-east-1}"
-      sed -i.bak "s|^AWS_DEFAULT_REGION=.*|AWS_DEFAULT_REGION=${aws_region}|" "$env_file"
-      rm -f "${env_file}.bak"
+      grep -v "^AWS_DEFAULT_REGION=" "$env_file" > "${env_file}.tmp" 2>/dev/null || true
+      printf '%s=%s\n' "AWS_DEFAULT_REGION" "${aws_region}" >> "${env_file}.tmp"
+      mv "${env_file}.tmp" "$env_file"
       ;;
     openai)
       prompt_key "OPENAI_API_KEY" "from platform.openai.com/api-keys" "required"
@@ -1057,7 +1094,7 @@ wire_env_to_shell() {
   fi
 
   local source_line="# Helios/Pi API keys"
-  local source_cmd="[ -f ~/.pi/agent/.env ] && set -a && source ~/.pi/agent/.env && set +a"
+  local source_cmd="[ -f ~/.pi/agent/.env ] && { while IFS='=' read -r key val; do [[ \"\$key\" =~ ^[A-Z_][A-Z_0-9]*$ ]] && [ -n \"\$val\" ] && export \"\$key=\$val\"; done < ~/.pi/agent/.env; }"
 
   if grep -qF "source ~/.pi/agent/.env" "$shell_profile" 2>/dev/null || grep -qF ".pi/agent/.env" "$shell_profile" 2>/dev/null; then
     success "Shell profile already sources .env"
@@ -1070,9 +1107,9 @@ wire_env_to_shell() {
 
   # Source now for immediate use
   if [[ -f "$env_file" ]]; then
-    set -a
-    source "$env_file"
-    set +a
+    while IFS='=' read -r key val; do
+      [[ "$key" =~ ^[A-Z_][A-Z_0-9]*$ ]] && [ -n "$val" ] && export "$key=$val"
+    done < "$env_file"
     success "API keys loaded into current session"
   fi
 
