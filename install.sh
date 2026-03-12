@@ -287,7 +287,7 @@ setup_helios_agent() {
     # Stash user files before extraction
     local tmp_stash
     tmp_stash="$(mktemp -d)"
-    for preserve in .env settings.json governance sessions .helios; do
+    for preserve in .env settings.json governance sessions .helios auth.json run-history.jsonl; do
       [[ -e "$PI_AGENT_DIR/$preserve" ]] && cp -a "$PI_AGENT_DIR/$preserve" "$tmp_stash/"
     done
 
@@ -322,7 +322,7 @@ setup_helios_agent() {
 
     rm -rf "$PI_AGENT_DIR"
     mkdir -p "$PI_AGENT_DIR"
-    if ! tar -xzf "$tmp_tarball" -C "$PI_AGENT_DIR" --strip-components=1 2>>"$LOG_FILE"; then
+    if ! tar -xzf "$tmp_tarball" -C "$PI_AGENT_DIR" --strip-components=1 2>>"${LOG_FILE:-/dev/null}"; then
       warn "Tarball extraction failed — restoring backup"
       rm -rf "$PI_AGENT_DIR"
       cp -a "$backup_dir" "$PI_AGENT_DIR"
@@ -332,12 +332,16 @@ setup_helios_agent() {
     rm -f "$tmp_tarball"
 
     # Restore user files
-    for preserve in .env settings.json governance sessions .helios; do
+    for preserve in .env settings.json governance sessions .helios auth.json run-history.jsonl; do
       [[ -e "$tmp_stash/$preserve" ]] && cp -a "$tmp_stash/$preserve" "$PI_AGENT_DIR/"
     done
     rm -rf "$tmp_stash"
 
     success "Helios agent updated to $remote_version"
+    # Ensure VERSION file exists after update
+    if [[ ! -f "$PI_AGENT_DIR/VERSION" ]]; then
+      echo "$remote_version" > "$PI_AGENT_DIR/VERSION"
+    fi
     return 0
   fi
 
@@ -348,7 +352,7 @@ setup_helios_agent() {
     # Stash user files
     local tmp_stash
     tmp_stash="$(mktemp -d)"
-    for preserve in .env settings.json governance sessions .helios; do
+    for preserve in .env settings.json governance sessions .helios auth.json run-history.jsonl; do
       [[ -e "$PI_AGENT_DIR/$preserve" ]] && cp -a "$PI_AGENT_DIR/$preserve" "$tmp_stash/"
     done
 
@@ -388,7 +392,7 @@ setup_helios_agent() {
     # Replace git install with tarball
     rm -rf "$PI_AGENT_DIR"
     mkdir -p "$PI_AGENT_DIR"
-    if ! tar -xzf "$tmp_tarball" -C "$PI_AGENT_DIR" --strip-components=1 2>>"$LOG_FILE"; then
+    if ! tar -xzf "$tmp_tarball" -C "$PI_AGENT_DIR" --strip-components=1 2>>"${LOG_FILE:-/dev/null}"; then
       warn "Tarball extraction failed — restoring git backup"
       rm -rf "$PI_AGENT_DIR"
       cp -a "$backup_dir" "$PI_AGENT_DIR"
@@ -398,12 +402,16 @@ setup_helios_agent() {
     rm -f "$tmp_tarball"
 
     # Restore user files
-    for preserve in .env settings.json governance sessions .helios; do
+    for preserve in .env settings.json governance sessions .helios auth.json run-history.jsonl; do
       [[ -e "$tmp_stash/$preserve" ]] && cp -a "$tmp_stash/$preserve" "$PI_AGENT_DIR/"
     done
     rm -rf "$tmp_stash"
 
     success "Migrated from git to tarball distribution ($(cat "$PI_AGENT_DIR/VERSION" 2>/dev/null || echo 'unknown'))"
+    # Ensure VERSION file exists after migration
+    if [[ ! -f "$PI_AGENT_DIR/VERSION" ]]; then
+      echo "tarball-$(date +%Y%m%d)" > "$PI_AGENT_DIR/VERSION"
+    fi
     info "Git backup preserved at: $backup_dir"
     return 0
   fi
@@ -453,7 +461,7 @@ setup_helios_agent() {
 
   mkdir -p "$HOME/.pi"
   mkdir -p "$PI_AGENT_DIR"
-  if ! tar -xzf "$tmp_tarball" -C "$PI_AGENT_DIR" --strip-components=1 2>>"$LOG_FILE"; then
+  if ! tar -xzf "$tmp_tarball" -C "$PI_AGENT_DIR" --strip-components=1 2>>"${LOG_FILE:-/dev/null}"; then
     warn "Tarball extraction failed — skipping helios-agent install"
     rm -rf "$PI_AGENT_DIR" "$tmp_tarball" "$tmp_checksum"
     return 1
@@ -494,6 +502,20 @@ install_helios_cli() {
     success "helios → ~/.local/bin/helios"
     if ! echo "$PATH" | tr ':' '\n' | grep -q "$HOME/.local/bin"; then
       warn "Add to your shell config: export PATH=\"\$HOME/.local/bin:\$PATH\""
+    fi
+  fi
+
+
+  # Also symlink fd if present and not already in PATH
+  local fd_bin="$PI_AGENT_DIR/bin/fd"
+  if [[ -f "$fd_bin" ]] && ! command -v fd &>/dev/null; then
+    chmod +x "$fd_bin"
+    if [[ -w /usr/local/bin ]]; then
+      ln -sfn "$fd_bin" /usr/local/bin/fd
+      success "fd → /usr/local/bin/fd"
+    elif [[ -d "$HOME/.local/bin" ]]; then
+      ln -sfn "$fd_bin" "$HOME/.local/bin/fd"
+      success "fd → ~/.local/bin/fd"
     fi
   fi
 
@@ -1094,7 +1116,7 @@ wire_env_to_shell() {
   fi
 
   local source_line="# Helios/Pi API keys"
-  local source_cmd="[ -f ~/.pi/agent/.env ] && { while IFS='=' read -r key val; do [[ \"\$key\" =~ ^[A-Z_][A-Z_0-9]*$ ]] && [ -n \"\$val\" ] && export \"\$key=\$val\"; done < ~/.pi/agent/.env; }"
+  local source_cmd="[ -f ~/.pi/agent/.env ] && set -a && source ~/.pi/agent/.env && set +a"
 
   if grep -qF "source ~/.pi/agent/.env" "$shell_profile" 2>/dev/null || grep -qF ".pi/agent/.env" "$shell_profile" 2>/dev/null; then
     success "Shell profile already sources .env"
@@ -1108,6 +1130,12 @@ wire_env_to_shell() {
   # Source now for immediate use
   if [[ -f "$env_file" ]]; then
     while IFS='=' read -r key val; do
+      key="${key#export }"        # strip 'export ' prefix
+      key="${key#"${key%%[! ]*}"}" # strip leading whitespace
+      val="${val#"${val%%[! ]*}"}" # strip leading whitespace
+      val="${val%"${val##*[! ]}"}" # strip trailing whitespace
+      val="${val#\"}" ; val="${val%\"}"   # strip double quotes
+      val="${val#\'}" ; val="${val%\'}"   # strip single quotes
       [[ "$key" =~ ^[A-Z_][A-Z_0-9]*$ ]] && [ -n "$val" ] && export "$key=$val"
     done < "$env_file"
     success "API keys loaded into current session"
@@ -1203,10 +1231,10 @@ run_verification() {
   local agent_count=0
   if [[ -d "$PI_AGENT_DIR/agents" ]]; then
     agent_count=$(find "$PI_AGENT_DIR/agents" -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
-    if [[ "$agent_count" -ge 40 ]]; then
-      success "Agents: $agent_count (expect 40+)"
+    if [[ "$agent_count" -ge 48 ]]; then
+      success "Agents: $agent_count (expect 48+)"
     else
-      warn "Agents: $agent_count (expected 40+) — packages may not be fully installed"
+      warn "Agents: $agent_count (expected 48+) — packages may not be fully installed"
     fi
   fi
 
@@ -1217,10 +1245,10 @@ run_verification() {
      find "$FAMILIAR_DIR/skills" -name "SKILL.md" 2>/dev/null
      true) | wc -l | tr -d ' '
   )
-  if [[ "$skill_count" -ge 13 ]]; then
-    success "Skills: $skill_count (expect 13+)"
+  if [[ "$skill_count" -ge 16 ]]; then
+    success "Skills: $skill_count (expect 16+)"
   else
-    warn "Skills: $skill_count (expected 13+)"
+    warn "Skills: $skill_count (expected 16+)"
   fi
 
   # Count extensions

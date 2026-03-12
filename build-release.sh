@@ -108,8 +108,10 @@ trap 'echo "🧹 Cleaning up temp dir: ${TMPDIR}"; rm -rf "${TMPDIR}"' EXIT
 
 echo ""
 echo "📋 Copying helios-agent from ${SOURCE_DIR} ..."
-echo "   Excluding: .git/, node_modules/, .env files, governance/events.jsonl,"
-echo "              sessions/, .backup.* dirs, *.log files"
+echo "   Excluding: .git/, node_modules/, .env, auth.json, settings.json,"
+echo "              governance/events.jsonl, governance/inline-enforce.jsonl,"
+echo "              sessions/, .helios/, .backup.*, *.log, *.disabled,"
+echo "              run-history.jsonl, mcp-cache.json, user artifacts"
 
 rsync -a \
   --exclude='.git/' \
@@ -117,8 +119,20 @@ rsync -a \
   --exclude='.env' \
   --exclude='.env.*' \
   --exclude='*.env' \
+  --exclude='auth.json' \
+  --exclude='run-history.jsonl' \
+  --exclude='mcp-cache.json' \
+  --exclude='provider-health-history.jsonl' \
+  --exclude='skill-graph-dlq.jsonl' \
+  --exclude='pi-messenger.json' \
+  --exclude='session-review.md' \
+  --exclude='context.md' \
+  --exclude='settings.json' \
+  --exclude='DELEGATION_FAILURE_ANALYSIS.md' \
+  --exclude='.helios/' \
+  --exclude='*.disabled' \
   --exclude='governance/events.jsonl' \
-  --exclude='governance/' \
+  --exclude='governance/inline-enforce.jsonl' \
   --exclude='sessions/' \
   --exclude='.backup.*/' \
   --exclude='*.log' \
@@ -132,8 +146,26 @@ rsync -a \
   --exclude='dist/' \
   --exclude='*.tar.gz' \
   --exclude='.planning/' \
+  --exclude='.DS_Store' \
   "${SOURCE_DIR}/" \
   "${STAGE_DIR}/"
+
+# ---------------------------------------------------------------------------
+# Replace user-specific governance files with clean templates
+# ---------------------------------------------------------------------------
+if [[ -d "${STAGE_DIR}/governance" ]]; then
+  echo "🔄 Writing clean governance templates..."
+  cat > "${STAGE_DIR}/governance/credibility.json" << 'GOVTPL'
+{}
+GOVTPL
+  cat > "${STAGE_DIR}/governance/specialization-registry.json" << 'GOVTPL'
+{
+  "taskTypes": {},
+  "lastUpdated": null
+}
+GOVTPL
+  echo "✅ Governance templates written (credibility.json, specialization-registry.json)"
+fi
 
 echo "✅ Copy complete"
 

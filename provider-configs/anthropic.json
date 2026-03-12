@@ -18,7 +18,9 @@
     "amazon-bedrock/us.anthropic.claude-opus-4-6-v1",
     "openai-codex/gpt-5.4",
     "openai-codex/gpt-5.3-codex",
-    "openai-codex/gpt-5.2"
+    "openai-codex/gpt-5.2",
+    "openai/gpt-5.2",
+    "openai/gpt-5.1"
   ],
   "skills": [
     "~/.pi/agent/skills",
@@ -47,11 +49,13 @@
     "git:github.com/nicobailon/pi-boomerang"
   ],
   "extensions": [
+    "~/.pi/agent/extensions/helios-tui.ts",
     "~/.pi/agent/extensions/helios-governance",
     "~/.pi/agent/extensions/codebase-index.ts",
-    "~/.pi/agent/extensions/mcp-startup-visibility.ts",
     "~/.pi/agent/extensions/subagent-inline-enforce.ts",
     "~/.pi/agent/extensions/subagent-mesh.ts",
     "~/.pi/agent/extensions/auto-update.ts"
-  ]
+  ],
+  "theme": "helios",
+  "interview": {}
 }
