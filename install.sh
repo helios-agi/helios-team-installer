@@ -391,20 +391,7 @@ setup_helios_agent() {
       echo "$remote_version" > "$PI_AGENT_DIR/VERSION"
     fi
 
-    # Bootstrap git so /update and auto-update work
-    if [[ ! -d "$PI_AGENT_DIR/.git" ]]; then
-      info "Bootstrapping git for auto-update..."
-      if (cd "$PI_AGENT_DIR" && \
-          git init -q && \
-          git remote add origin "https://x-access-token:$(gh auth token 2>/dev/null)@github.com/sweetcheeks72/helios-agent.git" && \
-          git fetch -q origin main && \
-          git reset --mixed origin/main && \
-          git branch -M main) 2>>"${LOG_FILE:-/dev/null}"; then
-        success "Git initialized for auto-update"
-      else
-        warn "Git bootstrap skipped — /update will handle it on first run"
-      fi
-    fi
+    # /update uses tarball mechanism (same as this installer) — no git needed
     return 0
   fi
 
