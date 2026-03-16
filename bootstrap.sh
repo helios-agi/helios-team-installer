@@ -95,51 +95,84 @@ cat << 'BANNER'
 BANNER
 echo -e "${RESET}"
 
-# ─── Prerequisites ────────────────────────────────────────────────────────────
-echo -e "  ${BOLD}Checking prerequisites...${RESET}"
+# ─── Auto-install Prerequisites ───────────────────────────────────────────────
+echo -e "  ${BOLD}Installing prerequisites...${RESET}"
 
-fail=false
+PLATFORM="$(uname -s)"
+ARCH="$(uname -m)"
 
-if command -v node &>/dev/null; then
-  if node -e "process.exit(parseInt(process.version.slice(1)) < 18 ? 1 : 0)" 2>/dev/null; then
-    echo -e "  ${GREEN}✓${RESET} Node.js $(node -v)"
+# Homebrew (macOS only)
+if [[ "$PLATFORM" == "Darwin" ]] && ! command -v brew &>/dev/null; then
+  echo -e "  ${CYAN}⬇${RESET}  Installing Homebrew..."
+  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" </dev/null
+  # Add brew to PATH for this session
+  if [[ "$ARCH" == "arm64" ]]; then
+    eval "$(/opt/homebrew/bin/brew shellenv)" 2>/dev/null || true
   else
-    echo -e "  ${RED}✗${RESET} Node.js 18+ required (found $(node -v))"
-    fail=true
+    eval "$(/usr/local/bin/brew shellenv)" 2>/dev/null || true
   fi
-else
-  echo -e "  ${RED}✗${RESET} Node.js not found — install from https://nodejs.org"
-  echo -e "      ${DIM}macOS: brew install node | Ubuntu/WSL: sudo apt install nodejs npm${RESET}"
-  fail=true
+  command -v brew &>/dev/null && echo -e "  ${GREEN}✓${RESET} Homebrew installed" || echo -e "  ${RED}✗${RESET} Homebrew install failed"
 fi
 
+# Node.js 18+
+node_ok=false
+if command -v node &>/dev/null; then
+  if node -e "process.exit(parseInt(process.version.slice(1)) < 18 ? 1 : 0)" 2>/dev/null; then
+    node_ok=true
+    echo -e "  ${GREEN}✓${RESET} Node.js $(node -v)"
+  fi
+fi
+if [[ "$node_ok" == false ]]; then
+  echo -e "  ${CYAN}⬇${RESET}  Installing Node.js..."
+  if [[ "$PLATFORM" == "Darwin" ]] && command -v brew &>/dev/null; then
+    brew install node 2>/dev/null
+  elif command -v apt-get &>/dev/null; then
+    # Use NodeSource for Node 22 LTS on Ubuntu/Debian/WSL
+    if command -v curl &>/dev/null; then
+      curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - 2>/dev/null
+      sudo apt-get install -y nodejs 2>/dev/null
+    else
+      sudo apt-get update -y 2>/dev/null && sudo apt-get install -y nodejs npm 2>/dev/null
+    fi
+  fi
+  command -v node &>/dev/null && echo -e "  ${GREEN}✓${RESET} Node.js $(node -v) installed" || { echo -e "  ${RED}✗${RESET} Node.js install failed — install manually: https://nodejs.org"; exit 1; }
+fi
+
+# git
 if command -v git &>/dev/null; then
   echo -e "  ${GREEN}✓${RESET} git $(git --version | awk '{print $3}')"
 else
-  echo -e "  ${RED}✗${RESET} git not found"
-  echo -e "      ${DIM}macOS: brew install git | Ubuntu/WSL: sudo apt install git${RESET}"
-  fail=true
+  echo -e "  ${CYAN}⬇${RESET}  Installing git..."
+  if [[ "$PLATFORM" == "Darwin" ]] && command -v brew &>/dev/null; then
+    brew install git 2>/dev/null
+  elif command -v apt-get &>/dev/null; then
+    sudo apt-get install -y git 2>/dev/null
+  fi
+  command -v git &>/dev/null && echo -e "  ${GREEN}✓${RESET} git installed" || { echo -e "  ${RED}✗${RESET} git install failed"; exit 1; }
 fi
 
+# npm (comes with node, but verify)
 if command -v npm &>/dev/null; then
   echo -e "  ${GREEN}✓${RESET} npm $(npm -v)"
 else
-  echo -e "  ${RED}✗${RESET} npm not found"
-  fail=true
+  echo -e "  ${RED}✗${RESET} npm not found (should come with Node.js)"
+  exit 1
 fi
 
+# python3
 if command -v python3 &>/dev/null; then
   echo -e "  ${GREEN}✓${RESET} python3 $(python3 --version 2>/dev/null | awk '{print $2}')"
 else
-  echo -e "  ${RED}✗${RESET} python3 not found"
-  echo -e "      ${DIM}macOS: xcode-select --install | Ubuntu/WSL: sudo apt install python3${RESET}"
-  fail=true
-fi
-
-if [ "$fail" = true ]; then
-  echo ""
-  echo -e "  ${RED}${BOLD}✗ Missing prerequisites. Install them and try again.${RESET}"
-  exit 1
+  echo -e "  ${CYAN}⬇${RESET}  Installing python3..."
+  if [[ "$PLATFORM" == "Darwin" ]]; then
+    # Xcode CLT includes python3
+    xcode-select --install 2>/dev/null || true
+    # Fallback to brew
+    command -v python3 &>/dev/null || brew install python3 2>/dev/null
+  elif command -v apt-get &>/dev/null; then
+    sudo apt-get install -y python3 2>/dev/null
+  fi
+  command -v python3 &>/dev/null && echo -e "  ${GREEN}✓${RESET} python3 installed" || echo -e "  ${YELLOW}⚠${RESET} python3 not found — some features may be limited"
 fi
 
 echo ""
