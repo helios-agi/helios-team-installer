@@ -35,8 +35,14 @@ done
 # ─── Restore stdin from terminal (critical for curl|bash piping) ─────────────
 # When run via `curl ... | bash`, stdin is the pipe (EOF after script downloads).
 # Reopen stdin from /dev/tty so interactive `read` commands work.
-if [[ ! -t 0 ]] && [[ -e /dev/tty ]]; then
-  exec < /dev/tty || true
+if [[ ! -t 0 ]]; then
+  if [[ -e /dev/tty ]]; then
+    exec < /dev/tty || true
+  else
+    echo "ERROR: No terminal available (/dev/tty). Run this script directly instead of piping." >&2
+    echo "  bash <(curl -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh)" >&2
+    exit 1
+  fi
 fi
 
 cleanup() {
@@ -179,84 +185,194 @@ run_with_spinner() {
   fi
 }
 
-# ─── Prerequisite Checks ──────────────────────────────────────────────────────
 check_prerequisites() {
-  step "Checking prerequisites"
+  step "Prerequisites (auto-installing missing dependencies)"
 
-  local missing=()
+  local platform
+  platform="$(current_platform)"
+  local arch
+  arch="$(uname -m)"
 
-  # Node.js 18+
-  if command -v node &>/dev/null; then
-    local node_ver
-    node_ver=$(node -e "process.exit(parseInt(process.version.slice(1)) < 18 ? 1 : 0)" 2>/dev/null && node -e "console.log(process.version)" 2>/dev/null || echo "old")
-    if node -e "process.exit(parseInt(process.version.slice(1)) < 18 ? 1 : 0)" 2>/dev/null; then
-      success "Node.js $(node -v) ✓"
-    else
-      error "Node.js 18+ required (found: $(node -v))"
-      missing+=("node18+")
+  # ── Homebrew (macOS only) ──────────────────────────────────────────────────
+  if [[ "$platform" == "macos" ]] && ! command -v brew &>/dev/null; then
+    info "Installing Homebrew (required for macOS package management)..."
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" </dev/null >> "$LOG_FILE" 2>&1
+    # Add brew to PATH for this session
+    if [[ -x /opt/homebrew/bin/brew ]]; then
+      eval "$(/opt/homebrew/bin/brew shellenv)" 2>/dev/null || true
+    elif [[ -x /usr/local/bin/brew ]]; then
+      eval "$(/usr/local/bin/brew shellenv)" 2>/dev/null || true
     fi
-  else
-    error "Node.js not found"
-    missing+=("node")
+    if command -v brew &>/dev/null; then
+      success "Homebrew installed"
+    else
+      error "Homebrew install failed — install manually: https://brew.sh"
+      exit 1
+    fi
   fi
 
-  # npm
+  # ── One-time apt-get update (linux/wsl) ────────────────────────────────────
+  if [[ "$platform" == "linux" ]] || [[ "$platform" == "wsl" ]]; then
+    sudo apt-get update -y >> "$LOG_FILE" 2>&1 || true
+  fi
+
+  # ── Helper: install a dependency ───────────────────────────────────────────
+  _install_dep() {
+    local cmd="$1" brew_pkg="${2:-$1}" apt_pkg="${3:-$1}"
+    if command -v "$cmd" &>/dev/null; then
+      return 0
+    fi
+    info "Installing $cmd..."
+    case "$platform" in
+      macos)
+        brew install "$brew_pkg" >> "$LOG_FILE" 2>&1 ;;
+      linux|wsl)
+        sudo apt-get install -y "$apt_pkg" >> "$LOG_FILE" 2>&1 ;;
+      *)
+        warn "$cmd: unsupported platform ($platform) — install manually"
+        return 1 ;;
+    esac
+    command -v "$cmd" &>/dev/null
+  }
+
+  # ── Node.js 18+ ────────────────────────────────────────────────────────────
+  local node_ok=false
+  if command -v node &>/dev/null; then
+    if node -e "process.exit(parseInt(process.version.slice(1)) < 18 ? 1 : 0)" 2>/dev/null; then
+      node_ok=true
+      success "Node.js $(node -v)"
+    else
+      warn "Node.js $(node -v) is too old (need 18+) — upgrading..."
+    fi
+  fi
+
+  if [[ "$node_ok" == false ]]; then
+    info "Installing Node.js..."
+    case "$platform" in
+      macos)
+        brew install node >> "$LOG_FILE" 2>&1 ;;
+      linux|wsl)
+        # NodeSource for Node 22 LTS (Ubuntu/Debian)
+        if command -v curl &>/dev/null; then
+          curl -fsSL https://deb.nodesource.com/setup_22.x 2>/dev/null | sudo bash - >> "$LOG_FILE" 2>&1
+          sudo apt-get install -y nodejs >> "$LOG_FILE" 2>&1
+        else
+          sudo apt-get update -y >> "$LOG_FILE" 2>&1
+          sudo apt-get install -y nodejs npm >> "$LOG_FILE" 2>&1
+        fi
+        ;;
+    esac
+    if command -v node &>/dev/null && node -e "process.exit(parseInt(process.version.slice(1)) < 18 ? 1 : 0)" 2>/dev/null; then
+      success "Node.js $(node -v) installed"
+    else
+      error "Node.js 18+ installation failed"
+      echo -e "    ${DIM}Install manually: https://nodejs.org${RESET}"
+      exit 1
+    fi
+  fi
+
+  # ── npm ─────────────────────────────────────────────────────────────────────
   if command -v npm &>/dev/null; then
-    success "npm $(npm -v) ✓"
+    success "npm $(npm -v)"
   else
-    error "npm not found"
-    missing+=("npm")
-  fi
-
-  # git
-  if command -v git &>/dev/null; then
-    success "git $(git --version | awk '{print $3}') ✓"
-  else
-    error "git not found"
-    missing+=("git")
-  fi
-
-  # curl
-  if command -v curl &>/dev/null; then
-    success "curl ✓"
-  else
-    warn "curl not found — some features may be limited"
-  fi
-
-  # python3 (required for JSON merging)
-  if command -v python3 &>/dev/null; then
-    success "python3 $(python3 --version 2>/dev/null | awk '{print $2}') ✓"
-  else
-    error "python3 not found — required for configuration"
-    echo -e "    ${DIM}macOS: xcode-select --install${RESET}"
-    echo -e "    ${DIM}Linux: apt install python3 / brew install python3${RESET}"
-    missing+=("python3")
-  fi
-
-  if [[ "$(uname -s)" == "Darwin" ]] && ! xcode-select -p &>/dev/null; then
-    warn "Xcode Command Line Tools not installed — native deps may fail"
-    info "Fix: xcode-select --install"
-  fi
-
-  if [[ ${#missing[@]} -gt 0 ]]; then
-    echo ""
-    error "Missing required prerequisites: ${missing[*]}"
-    echo ""
-    echo -e "  ${BOLD}Install guide:${RESET}"
-    echo -e "  • Node.js 18+: https://nodejs.org or ${DIM}brew install node${RESET}"
-    echo -e "  • git: ${DIM}brew install git${RESET} or ${DIM}apt install git${RESET}"
+    error "npm not found (should come with Node.js) — install Node.js from https://nodejs.org"
     exit 1
   fi
 
+  # ── git ─────────────────────────────────────────────────────────────────────
+  if _install_dep git git git; then
+    success "git $(git --version | awk '{print $3}')"
+  else
+    error "git installation failed"
+    exit 1
+  fi
+
+  # ── curl ────────────────────────────────────────────────────────────────────
+  if command -v curl &>/dev/null; then
+    success "curl"
+  else
+    _install_dep curl curl curl || warn "curl not found — some features may be limited"
+  fi
+
+  # ── python3 ─────────────────────────────────────────────────────────────────
+  if command -v python3 &>/dev/null; then
+    success "python3 $(python3 --version 2>/dev/null | awk '{print $2}')"
+  else
+    info "Installing python3..."
+    case "$platform" in
+      macos)
+        brew install python3 >> "$LOG_FILE" 2>&1
+        ;;
+      linux|wsl)
+        sudo apt-get install -y python3 >> "$LOG_FILE" 2>&1
+        ;;
+    esac
+    if command -v python3 &>/dev/null; then
+      success "python3 $(python3 --version 2>/dev/null | awk '{print $2}') installed"
+    else
+      warn "python3 not found — some configuration features may be limited"
+    fi
+  fi
+
+  # ── pnpm ────────────────────────────────────────────────────────────────────
+  if command -v pnpm &>/dev/null; then
+    success "pnpm $(pnpm -v 2>/dev/null)"
+  else
+    info "Installing pnpm..."
+    npm install -g pnpm >> "$LOG_FILE" 2>&1 && success "pnpm installed" || warn "pnpm install failed — not critical"
+  fi
+
+  # ── Docker / OrbStack ───────────────────────────────────────────────────────
+  if command -v docker &>/dev/null; then
+    if docker info &>/dev/null 2>&1; then
+      success "Docker (running)"
+    else
+      warn "Docker installed but not running — start OrbStack or Docker Desktop"
+    fi
+  else
+    info "Installing container runtime (for Memgraph knowledge graph)..."
+    case "$platform" in
+      macos)
+        info "Installing OrbStack (lightweight Docker for macOS)..."
+        brew install --cask orbstack >> "$LOG_FILE" 2>&1 && {
+          success "OrbStack installed — launch it to start Docker"
+        } || warn "OrbStack install failed — install manually: https://orbstack.dev"
+        ;;
+      linux)
+        info "Installing Docker CE..."
+        if command -v curl &>/dev/null; then
+          info "This will run the Docker install script with sudo permissions"
+          curl -fsSL https://get.docker.com 2>/dev/null | sh >> "$LOG_FILE" 2>&1 && {
+            sudo usermod -aG docker "$USER" 2>/dev/null || true
+            success "Docker CE installed"
+          } || warn "Docker install failed — install manually: https://docs.docker.com/engine/install/"
+        else
+          warn "curl needed for Docker install — install Docker manually"
+        fi
+        ;;
+      wsl)
+        warn "Docker in WSL: Install Docker Desktop for Windows with WSL integration"
+        info "https://docs.docker.com/desktop/wsl/"
+        ;;
+    esac
+  fi
+
+  # ── Xcode Command Line Tools (macOS) ───────────────────────────────────────
+  if [[ "$platform" == "macos" ]] && ! xcode-select -p &>/dev/null; then
+    info "Installing Xcode Command Line Tools..."
+    xcode-select --install 2>/dev/null || true
+    warn "Xcode CLT may need manual confirmation — check the popup dialog"
+  fi
+
   # WSL-specific guidance
-  if is_wsl; then
+  if [[ "$platform" == "wsl" ]]; then
     echo -e "  ${CYAN}ℹ${RESET}  Running inside WSL — great! Full Linux environment detected."
     if command -v docker &>/dev/null; then
-      echo -e "  ${GREEN}✓${RESET} Docker available in WSL"
+      success "Docker available in WSL"
     else
-      echo -e "  ${YELLOW}⚠${RESET} Docker not found in WSL"
-      echo -e "    ${DIM}Install Docker Desktop for Windows and enable WSL integration:${RESET}"
-      echo -e "    ${DIM}https://docs.docker.com/desktop/wsl/${RESET}"
+      warn "Docker not found in WSL"
+      info "Install Docker Desktop for Windows and enable WSL integration:"
+      info "https://docs.docker.com/desktop/wsl/"
     fi
     echo ""
   fi
