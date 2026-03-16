@@ -12,20 +12,23 @@ This walks you through provider selection, API keys, and installs everything: Pi
 
 ### Windows
 
-Helios runs inside WSL (Windows Subsystem for Linux):
+One command in PowerShell:
 
-1. **Install WSL** (PowerShell as Admin):
-   ```powershell
-   wsl --install
-   ```
-2. Restart your computer
-3. Open **Ubuntu** from the Start menu
-4. Run the install command:
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh | bash
-   ```
+```powershell
+irm https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/install.ps1 | iex
+```
 
-> **Prerequisites for WSL:** Docker Desktop with [WSL integration enabled](https://docs.docker.com/desktop/wsl/), Node.js 18+ (install via [nvm](https://github.com/nvm-sh/nvm) or [NodeSource](https://github.com/nodesource/distributions)), git, python3.
+This automatically:
+1. Installs WSL 2 + Ubuntu (if needed)
+2. Runs the full Helios installer inside WSL
+3. Creates `helios` and `pi` commands that work from PowerShell/CMD
+
+> **Requires:** Windows 10 (21H2+) or Windows 11. First-time WSL install needs a restart.
+> Docker Desktop with [WSL integration](https://docs.docker.com/desktop/wsl/) recommended for Memgraph.
+
+**Manual WSL setup** (if you prefer):
+1. `wsl --install` in admin PowerShell, restart
+2. Open Ubuntu, then: `curl -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh | bash`
 
 📖 **First time?** Read the [full team setup guide](TEAM-SETUP.md) — explains everything from scratch.
 

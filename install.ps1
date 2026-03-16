@@ -1,0 +1,311 @@
+#Requires -Version 5.1
+<#
+.SYNOPSIS
+    Helios Team Installer for Windows
+.DESCRIPTION
+    Bootstraps Helios + Pi inside WSL 2 / Ubuntu, then creates
+    helios.cmd, helios.ps1, pi.cmd, and pi.ps1 shims so the
+    commands work from any PowerShell or CMD window.
+.EXAMPLE
+    irm https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/install.ps1 | iex
+#>
+
+$ErrorActionPreference = 'Stop'
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+function Write-Banner {
+    Write-Host ""
+    Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "  ║           helios. — AI Orchestrator for Windows         ║" -ForegroundColor Cyan
+    Write-Host "  ║          Powered by Pi CLI + WSL 2 + Ubuntu             ║" -ForegroundColor Cyan
+    Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host ""
+}
+
+function Write-Step {
+    param([string]$Message)
+    Write-Host "  ▶  $Message" -ForegroundColor Cyan
+}
+
+function Write-OK {
+    param([string]$Message)
+    Write-Host "  ✓  $Message" -ForegroundColor Green
+}
+
+function Write-Warn {
+    param([string]$Message)
+    Write-Host "  ⚠  $Message" -ForegroundColor Yellow
+}
+
+function Write-Err {
+    param([string]$Message)
+    Write-Host "  ✗  $Message" -ForegroundColor Red
+}
+
+function Add-ToUserPath {
+    param([string]$Dir)
+    $currentPath = [System.Environment]::GetEnvironmentVariable('PATH', 'User')
+    if ($currentPath -split ';' -notcontains $Dir) {
+        $newPath = "$currentPath;$Dir".TrimStart(';')
+        [System.Environment]::SetEnvironmentVariable('PATH', $newPath, 'User')
+        # Also update the current session
+        $env:PATH = "$env:PATH;$Dir"
+        return $true
+    }
+    return $false
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 1 — Banner
+# ─────────────────────────────────────────────────────────────────────────────
+
+Write-Banner
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 2 — Windows version check
+# ─────────────────────────────────────────────────────────────────────────────
+
+Write-Step "Checking Windows version..."
+
+$osInfo = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction SilentlyContinue
+if (-not $osInfo) {
+    Write-Err "Could not determine Windows version."
+    exit 1
+}
+
+$caption    = $osInfo.Caption          # e.g. "Microsoft Windows 11 Pro"
+$buildStr   = $osInfo.BuildNumber      # e.g. "22000"
+$build      = [int]$buildStr
+
+# Windows 10 21H2 = build 19044
+# Windows 11 (first release) = build 22000
+$minBuild = 19044
+
+if ($build -lt $minBuild) {
+    Write-Err "Windows version not supported."
+    Write-Err "  Detected : $caption (build $build)"
+    Write-Err "  Required : Windows 10 21H2 (build 19044) or Windows 11"
+    Write-Err ""
+    Write-Err "  Please update Windows via Settings → Windows Update."
+    exit 1
+}
+
+Write-OK "$caption (build $build) — OK"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 3 — Check for WSL command
+# ─────────────────────────────────────────────────────────────────────────────
+
+Write-Step "Checking WSL availability..."
+
+$wslExe = Get-Command wsl -ErrorAction SilentlyContinue
+if (-not $wslExe) {
+    Write-Err "The 'wsl' command was not found."
+    Write-Err ""
+    Write-Err "  WSL is not installed on this machine."
+    Write-Err "  Run the following in an ADMIN PowerShell, then restart:"
+    Write-Host ""
+    Write-Host "      wsl --install" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Err "  Or re-run this script in an elevated (Admin) PowerShell and"
+    Write-Err "  it will attempt the install automatically."
+    exit 1
+}
+
+Write-OK "wsl command found at $($wslExe.Source)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 4 — Check if Ubuntu distro is installed in WSL
+# ─────────────────────────────────────────────────────────────────────────────
+
+Write-Step "Checking for Ubuntu in WSL..."
+
+# wsl --list --verbose exits 0 even when empty; parse output for Ubuntu
+$wslListRaw = & wsl --list --verbose 2>&1
+$wslList    = $wslListRaw | Out-String
+
+$ubuntuReady = $false
+foreach ($line in $wslListRaw) {
+    # Line format: "  Ubuntu   Running   2" (spaces, optional *, name, state, version)
+    $trimmed = $line -replace '[^\x20-\x7E]', '' # strip non-ASCII (BOM, utf-16 nulls)
+    $trimmed = $trimmed.Trim().TrimStart('*').Trim()
+    if ($trimmed -match '^Ubuntu') {
+        # Check WSL version column — we want version 2
+        if ($trimmed -match '\s+2\s*$') {
+            $ubuntuReady = $true
+        } elseif ($trimmed -match '\s+1\s*$') {
+            Write-Warn "Ubuntu found in WSL 1. Attempting upgrade to WSL 2..."
+            try {
+                & wsl --set-version Ubuntu 2 2>&1 | ForEach-Object { Write-Host "    $_" }
+                $ubuntuReady = $true
+            } catch {
+                Write-Warn "Could not auto-upgrade Ubuntu to WSL 2. You can do it manually:"
+                Write-Host "      wsl --set-version Ubuntu 2" -ForegroundColor Yellow
+                $ubuntuReady = $true  # proceed anyway; bootstrap.sh will surface any issues
+            }
+        } else {
+            # Line matched Ubuntu but version unclear — treat as ready
+            $ubuntuReady = $true
+        }
+        break
+    }
+}
+
+if (-not $ubuntuReady) {
+    Write-Warn "Ubuntu not found in WSL."
+    Write-Step "Installing Ubuntu via WSL (this may take a few minutes)..."
+
+    # Check for admin rights — WSL install requires elevation
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator
+    )
+
+    if (-not $isAdmin) {
+        Write-Err "Installing WSL requires administrator privileges."
+        Write-Err ""
+        Write-Err "  Please re-run this script in an Admin PowerShell:"
+        Write-Host ""
+        Write-Host "      Start-Process pwsh -Verb RunAs" -ForegroundColor Yellow
+        Write-Host "      # Then re-run:" -ForegroundColor DarkGray
+        Write-Host "      irm https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/install.ps1 | iex" -ForegroundColor Yellow
+        Write-Host ""
+        exit 1
+    }
+
+    try {
+        & wsl --install -d Ubuntu 2>&1 | ForEach-Object { Write-Host "    $_" }
+    } catch {
+        Write-Err "WSL install failed: $_"
+        Write-Err "Try running 'wsl --install -d Ubuntu' manually in Admin PowerShell."
+        exit 1
+    }
+
+    Write-Host ""
+    Write-Warn "╔══════════════════════════════════════════════════════════╗"
+    Write-Warn "║  WSL + Ubuntu installed — RESTART REQUIRED               ║"
+    Write-Warn "╠══════════════════════════════════════════════════════════╣"
+    Write-Warn "║  1. Restart your computer                                ║"
+    Write-Warn "║  2. Ubuntu will open and finish setting up               ║"
+    Write-Warn "║  3. Create your Linux username/password                  ║"
+    Write-Warn "║  4. Re-run this command in PowerShell:                   ║"
+    Write-Warn "║                                                           ║"
+    Write-Warn "║    irm https://raw.githubusercontent.com/                ║"
+    Write-Warn "║      sweetcheeks72/helios-team-installer/                ║"
+    Write-Warn "║      main/install.ps1 | iex                              ║"
+    Write-Warn "╚══════════════════════════════════════════════════════════╝"
+    Write-Host ""
+    exit 0
+}
+
+Write-OK "Ubuntu (WSL 2) is ready"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 5 — Run the Helios bash installer inside WSL
+# ─────────────────────────────────────────────────────────────────────────────
+
+Write-Step "Launching Helios installer inside WSL / Ubuntu..."
+Write-Host ""
+Write-Host "  ┄┄┄┄┄┄┄┄┄┄ WSL session begin ┄┄┄┄┄┄┄┄┄┄" -ForegroundColor DarkGray
+
+& wsl -d Ubuntu -- bash -c "curl -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh | bash"
+
+$wslExit = $LASTEXITCODE
+Write-Host "  ┄┄┄┄┄┄┄┄┄┄ WSL session end ┄┄┄┄┄┄┄┄┄┄┄" -ForegroundColor DarkGray
+Write-Host ""
+
+if ($wslExit -ne 0) {
+    Write-Err "The Helios bash installer exited with code $wslExit."
+    Write-Err "Check the output above for details."
+    exit $wslExit
+}
+
+Write-OK "Helios installed inside WSL"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 6 — Create Windows shims
+# ─────────────────────────────────────────────────────────────────────────────
+
+Write-Step "Creating Windows command shims..."
+
+$shimDir = Join-Path $env:LOCALAPPDATA 'Programs\Helios'
+if (-not (Test-Path $shimDir)) {
+    New-Item -ItemType Directory -Path $shimDir -Force | Out-Null
+    Write-OK "Created shim directory: $shimDir"
+} else {
+    Write-OK "Shim directory already exists: $shimDir"
+}
+
+# ── helios.cmd ────────────────────────────────────────────────────────────────
+$heliosCmdPath = Join-Path $shimDir 'helios.cmd'
+$heliosCmdContent = @'
+@echo off
+wsl -d Ubuntu -- helios %*
+'@
+Set-Content -Path $heliosCmdPath -Value $heliosCmdContent -Encoding ASCII -Force
+Write-OK "Written: helios.cmd"
+
+# ── helios.ps1 ───────────────────────────────────────────────────────────────
+$heliosPs1Path = Join-Path $shimDir 'helios.ps1'
+$heliosPs1Content = @'
+wsl -d Ubuntu -- helios @args
+'@
+Set-Content -Path $heliosPs1Path -Value $heliosPs1Content -Encoding UTF8 -Force
+Write-OK "Written: helios.ps1"
+
+# ── pi.cmd ────────────────────────────────────────────────────────────────────
+$piCmdPath = Join-Path $shimDir 'pi.cmd'
+$piCmdContent = @'
+@echo off
+wsl -d Ubuntu -- pi %*
+'@
+Set-Content -Path $piCmdPath -Value $piCmdContent -Encoding ASCII -Force
+Write-OK "Written: pi.cmd"
+
+# ── pi.ps1 ────────────────────────────────────────────────────────────────────
+$piPs1Path = Join-Path $shimDir 'pi.ps1'
+$piPs1Content = @'
+wsl -d Ubuntu -- pi @args
+'@
+Set-Content -Path $piPs1Path -Value $piPs1Content -Encoding UTF8 -Force
+Write-OK "Written: pi.ps1"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 7 — Add shim directory to user PATH
+# ─────────────────────────────────────────────────────────────────────────────
+
+Write-Step "Updating user PATH..."
+
+$added = Add-ToUserPath -Dir $shimDir
+if ($added) {
+    Write-OK "Added $shimDir to user PATH"
+    Write-Warn "PATH updated — restart your terminal for 'helios' and 'pi' to work."
+} else {
+    Write-OK "$shimDir already in user PATH"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 8 — Success
+# ─────────────────────────────────────────────────────────────────────────────
+
+Write-Host ""
+Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Green
+Write-Host "  ║                 ✓  Install complete!                     ║" -ForegroundColor Green
+Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Green
+Write-Host ""
+Write-Host "  Next steps:" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "    1. Close and reopen PowerShell (to pick up PATH change)" -ForegroundColor White
+Write-Host "    2. Run your first task:" -ForegroundColor White
+Write-Host ""
+Write-Host "         helios ""explain the codebase in /mnt/c/Users/$env:USERNAME/myproject""" -ForegroundColor Yellow
+Write-Host ""
+Write-Host "    3. Or drop into the Pi REPL:" -ForegroundColor White
+Write-Host ""
+Write-Host "         pi" -ForegroundColor Yellow
+Write-Host ""
+Write-Host "  Tip: 'helios' and 'pi' run in WSL / Ubuntu under the hood." -ForegroundColor DarkGray
+Write-Host "  Your Windows files are at /mnt/c/Users/$env:USERNAME/ inside WSL." -ForegroundColor DarkGray
+Write-Host ""
