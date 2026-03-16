@@ -18,6 +18,11 @@ One command in PowerShell:
 irm https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/install.ps1 | iex
 ```
 
+**Or from Command Prompt (no PowerShell needed):**
+```cmd
+curl -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/install.bat -o %TEMP%\install-helios.bat && %TEMP%\install-helios.bat
+```
+
 This automatically:
 1. Installs WSL 2 + Ubuntu (if needed)
 2. Runs the full Helios installer inside WSL
