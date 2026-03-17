@@ -8,6 +8,7 @@
 INSTALLER_VERSION="2.1.0"
 
 set -euo pipefail
+INSTALL_WARNINGS=()
 
 # ─── Early arg check (before tty redirect) ───────────────────────────────────
 for _arg in "$@"; do
@@ -171,16 +172,33 @@ stop_spinner() {
 run_with_spinner() {
   local msg="$1"; shift
   start_spinner "$msg"
-  "$@" >> "$LOG_FILE" 2>&1 &
+  local tmp_err
+  tmp_err="$(mktemp)"
+  # Run command: stdout to log only (exec tee already copies stdout to log, so
+  # use /dev/null here to avoid double-write). Stderr to temp file for error display.
+  "$@" > /dev/null 2>"$tmp_err" &
   local cmd_pid=$!
-  wait $cmd_pid
-  local cmd_exit=$?
+  # Use || cmd_exit=$? to prevent set -e from firing on failed wait, which would
+  # skip stop_spinner and leave the terminal in a corrupt state.
+  local cmd_exit=0
+  wait $cmd_pid || cmd_exit=$?
   stop_spinner
+  # Append stderr to log file regardless of outcome
+  cat "$tmp_err" >> "$LOG_FILE" 2>/dev/null || true
   if [[ $cmd_exit -eq 0 ]]; then
     success "$msg"
+    rm -f "$tmp_err"
     return 0
   else
-    error "$msg — see $LOG_FILE for details"
+    error "$msg"
+    if [[ -s "$tmp_err" ]]; then
+      echo -e "    ${DIM}--- Error details ---${RESET}" >&2
+      tail -8 "$tmp_err" | while IFS= read -r line; do
+        echo -e "    ${DIM}${line}${RESET}" >&2
+      done
+    fi
+    echo -e "    ${DIM}Full log: $LOG_FILE${RESET}" >&2
+    rm -f "$tmp_err"
     return $cmd_exit
   fi
 }
@@ -435,7 +453,7 @@ setup_helios_agent() {
   # ── Helper: download a file, return non-zero on failure ──────────────────
   _helios_download() {
     local url="$1" dest="$2"
-    curl -fsSL --max-time 30 -o "$dest" "$url" 2>/dev/null
+    curl -fSL --retry 3 --retry-delay 5 --max-time 300 -o "$dest" "$url"
   }
 
   # ── Update path: ~/.pi/agent/ exists and has a VERSION file ──────────────
@@ -769,7 +787,7 @@ select_provider() {
   echo -e "     ${DIM}Best for: OpenAI preference, GPT models.${RESET}"
   echo ""
   ask "Selection [1-3] (default: 1):"
-  read -t 30 -r provider_choice || provider_choice=""
+  read -t 120 -r provider_choice || provider_choice=""
   provider_choice="${provider_choice:-1}"
 
   case "$provider_choice" in
@@ -1139,6 +1157,7 @@ setup_memgraph() {
     info "Install OrbStack (recommended): https://orbstack.dev"
     info "Or Docker Engine / Colima / Podman"
     info "Then re-run the installer to set up Memgraph"
+    INSTALL_WARNINGS+=("Memgraph skipped — install Docker or OrbStack, then re-run installer")
     return 0
   fi
 
@@ -1228,6 +1247,7 @@ setup_ollama() {
   if ! command -v ollama &>/dev/null; then
     info "Ollama not found — skipping local embeddings"
     info "To enable semantic search later: brew install ollama && ollama pull nomic-embed-text"
+    INSTALL_WARNINGS+=("Ollama skipped — install from ollama.ai for local embeddings")
     return 0
   fi
 
@@ -1407,7 +1427,7 @@ setup_api_keys() {
     [[ "$required" == "recommended" ]] && label="${YELLOW}[recommended]${RESET}"
 
     ask "$key_name $label — $description:"
-    read -t 30 -rs key_val || key_val=""
+    read -t 120 -rs key_val || key_val=""
     echo ""  # newline after silent read
 
     if [[ -n "$key_val" ]]; then
@@ -1418,6 +1438,7 @@ setup_api_keys() {
       success "$key_name saved"
     else
       warn "$key_name skipped — add to $env_file later"
+      INSTALL_WARNINGS+=("$key_name not set — edit ~/.pi/agent/.env")
     fi
   }
 
@@ -1431,7 +1452,7 @@ setup_api_keys() {
       prompt_key "AWS_SECRET_ACCESS_KEY" "from AWS IAM Console" "required"
       echo ""
       ask "AWS_DEFAULT_REGION (default: us-east-1):"
-      read -t 30 -r aws_region || aws_region=""
+      read -t 120 -r aws_region || aws_region=""
       aws_region="${aws_region:-us-east-1}"
       grep -v "^AWS_DEFAULT_REGION=" "$env_file" > "${env_file}.tmp" 2>/dev/null || true
       printf '%s=%s\n' "AWS_DEFAULT_REGION" "${aws_region}" >> "${env_file}.tmp"
@@ -1516,7 +1537,7 @@ setup_familiar() {
 
   echo ""
   ask "Install Familiar skills? (Gmail, Calendar, Drive, transcription) [y/N]:"
-  read -t 30 -r install_familiar || install_familiar=""
+  read -t 120 -r install_familiar || install_familiar=""
   install_familiar="${install_familiar:-n}"
 
   if [[ ! "$install_familiar" =~ ^[Yy]$ ]]; then
@@ -1536,18 +1557,18 @@ setup_familiar() {
   info "Cloning Familiar → ~/.familiar/"
   echo ""
   ask "Proceed with clone? [y/N]:"
-  read -t 30 -r confirm_familiar || confirm_familiar=""
+  read -t 120 -r confirm_familiar || confirm_familiar=""
   if [[ ! "$confirm_familiar" =~ ^[Yy]$ ]]; then
     warn "Familiar setup skipped"
     return 0
   fi
 
   if ! run_with_spinner "Cloning familiar → ~/.familiar/" \
-    git clone "https://$FAMILIAR_REPO.git" "$FAMILIAR_DIR"; then
-    warn "Could not clone Familiar"
-    echo -e "    ${DIM}If this is a private repo, configure git credentials:${RESET}"
-    echo -e "    ${DIM}  gh auth login${RESET}"
-    echo -e "    ${DIM}  # or: git config --global credential.helper osxkeychain${RESET}"
+    git clone --single-branch --depth 1 "https://$FAMILIAR_REPO.git" "$FAMILIAR_DIR"; then
+    warn "Could not clone Familiar (repository may require authentication)"
+    info "To install Familiar later: gh auth login && git clone https://$FAMILIAR_REPO.git ~/.familiar"
+    info "Familiar enables Gmail, Calendar, and Drive skills — it's optional."
+    INSTALL_WARNINGS+=("Familiar skills skipped — repo requires GitHub authentication")
     return 0
   fi
   success "Familiar cloned to $FAMILIAR_DIR"
@@ -1556,7 +1577,7 @@ setup_familiar() {
   if [[ -f "$FAMILIAR_DIR/pnpm-lock.yaml" ]]; then
     if command -v pnpm &>/dev/null; then
       ask "Run pnpm install for Familiar dependencies? [y/N]:"
-      read -t 30 -r run_pnpm || run_pnpm=""
+      read -t 120 -r run_pnpm || run_pnpm=""
       if [[ "$run_pnpm" =~ ^[Yy]$ ]]; then
         run_with_spinner "Installing Familiar dependencies" \
           pnpm --dir "$FAMILIAR_DIR" install || warn "pnpm install had issues"
@@ -1722,6 +1743,13 @@ run_verification() {
 
 # ─── Quick-Start Guide ────────────────────────────────────────────────────────
 print_quickstart() {
+  if [[ ${#INSTALL_WARNINGS[@]} -gt 0 ]]; then
+    echo ""
+    echo -e "  ${YELLOW}${BOLD}⚠ Components that need attention:${RESET}"
+    for w in "${INSTALL_WARNINGS[@]}"; do
+      echo -e "    ${YELLOW}•${RESET} $w"
+    done
+  fi
   echo ""
   echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
   echo -e "${BOLD}${GREEN}  ✓ Helios + Pi Installation Complete!${RESET} ${DIM}(installer v${INSTALLER_VERSION})${RESET}"
@@ -2108,7 +2136,7 @@ PLIST_EOF
     local wsl_autostart_marker="# Helios WSL auto-start"
     if ! grep -q "$wsl_autostart_marker" "$HOME/.bashrc" 2>/dev/null; then
       ask "Add Helios service auto-start to ~/.bashrc? [y/N]:"
-      read -t 30 -r add_autostart || add_autostart=""
+      read -t 120 -r add_autostart || add_autostart=""
       if [[ "$add_autostart" =~ ^[Yy]$ ]]; then
         cat >> "$HOME/.bashrc" << 'WSLSTART'
 
@@ -2169,6 +2197,10 @@ main() {
   done
 
   print_banner
+  echo -e "  ${BOLD}Starting Helios installation...${RESET}"
+  echo -e "  ${DIM}This will install Pi CLI, Helios agent, and supporting tools.${RESET}"
+  echo -e "  ${DIM}Estimated time: 3-5 minutes.${RESET}"
+  echo ""
   detect_update_mode "$@"
   check_prerequisites
   install_pi
