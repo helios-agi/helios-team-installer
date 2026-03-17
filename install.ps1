@@ -208,6 +208,50 @@ Write-OK "Ubuntu (WSL 2) is ready"
 
 Write-Step "Launching Helios installer inside WSL / Ubuntu..."
 Write-Host ""
+
+# ── Step 5a — Verify Ubuntu has completed first-run initialization ────────────
+# Ubuntu's first-run wizard (username/password setup) intercepts the WSL
+# session and swallows any command we pass. We detect this by running
+# `echo ready` and checking if the output actually contains "ready".
+# If first-run intercepted, the output won't match and we guide the user.
+
+$maxInitRetries = 3
+$initAttempt    = 0
+$ubuntuReady    = $false
+
+while (-not $ubuntuReady -and $initAttempt -lt $maxInitRetries) {
+    $initAttempt++
+    Write-Host "  [»] Testing Ubuntu initialization (attempt $initAttempt of $maxInitRetries)..." -ForegroundColor DarkGray
+    $testOutput = (& wsl -d Ubuntu -- echo ready 2>&1) -join " "
+
+    if ($testOutput -match "ready") {
+        $ubuntuReady = $true
+    } else {
+        Write-Host ""
+        Write-Warn "Ubuntu needs first-time setup — a setup window may have appeared."
+        Write-Host ""
+        Write-Host "  Complete these steps in the Ubuntu window:" -ForegroundColor Yellow
+        Write-Host "    1) Enter a username when prompted" -ForegroundColor Cyan
+        Write-Host "    2) Enter and confirm a password when prompted" -ForegroundColor Cyan
+        Write-Host "    3) Type  exit  and press Enter to close the Ubuntu window" -ForegroundColor Cyan
+        Write-Host ""
+        if ($initAttempt -lt $maxInitRetries) {
+            Read-Host "  Press Enter here once you have completed setup and typed 'exit' in Ubuntu"
+            Write-Host ""
+        }
+    }
+}
+
+if (-not $ubuntuReady) {
+    Write-Err "Ubuntu did not finish initialization after $maxInitRetries attempts."
+    Write-Err "Please open Ubuntu from the Start Menu, complete the setup, then re-run this installer."
+    exit 1
+}
+
+Write-OK "Ubuntu is initialized and ready"
+Write-Host ""
+
+# ── Step 5b — Run the bootstrap (with one automatic retry on failure) ─────────
 Write-Host "  ┄┄┄┄┄┄┄┄┄┄ WSL session begin ┄┄┄┄┄┄┄┄┄┄" -ForegroundColor DarkGray
 
 & wsl -d Ubuntu -- bash -c "curl -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh | bash"
@@ -217,9 +261,31 @@ Write-Host "  ┄┄┄┄┄┄┄┄┄┄ WSL session end ┄┄┄┄┄┄�
 Write-Host ""
 
 if ($wslExit -ne 0) {
-    Write-Err "The Helios bash installer exited with code $wslExit."
-    Write-Err "Check the output above for details."
-    exit $wslExit
+    Write-Warn "Bootstrap exited with code $wslExit — retrying once..."
+    Write-Host ""
+    Write-Host "  If you see errors above, common fixes:" -ForegroundColor Yellow
+    Write-Host "    - Check internet:   wsl -d Ubuntu -- ping -c1 github.com" -ForegroundColor Cyan
+    Write-Host "    - Check disk space: wsl -d Ubuntu -- df -h" -ForegroundColor Cyan
+    Write-Host ""
+    Read-Host "  Press Enter to retry"
+    Write-Host ""
+    Write-Host "  ┄┄┄┄┄┄┄┄┄┄ WSL session begin (retry) ┄┄┄┄┄┄┄┄┄┄" -ForegroundColor DarkGray
+
+    & wsl -d Ubuntu -- bash -c "curl -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh | bash"
+
+    $wslExit = $LASTEXITCODE
+    Write-Host "  ┄┄┄┄┄┄┄┄┄┄ WSL session end ┄┄┄┄┄┄┄┄┄┄┄" -ForegroundColor DarkGray
+    Write-Host ""
+
+    if ($wslExit -ne 0) {
+        Write-Err "Bootstrap failed after retry (exit code $wslExit)."
+        Write-Err "Run this command directly inside Ubuntu to install manually:"
+        Write-Err ""
+        Write-Err "  curl -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh | bash"
+        Write-Err ""
+        Write-Err "Open Ubuntu from the Start Menu, paste the command above, and press Enter."
+        exit $wslExit
+    }
 }
 
 Write-OK "Helios installed inside WSL"
