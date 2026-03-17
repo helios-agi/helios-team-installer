@@ -109,7 +109,45 @@ if %errorlevel% neq 0 (
 echo  [+] Ubuntu found in WSL — OK
 echo.
 
-:: ─── Run bootstrap inside WSL Ubuntu ────────────────────────────────────────
+:: ─── Step 5a — Verify Ubuntu has completed first-run initialization ──────────
+:: Ubuntu's first-run wizard intercepts `wsl -d Ubuntu -- <cmd>` and swallows
+:: the command. We test with `echo ready`; if the output doesn't contain
+:: "ready" then first-run intercepted it and we guide the user through setup.
+
+set _INIT_ATTEMPTS=0
+
+:wsl_init_check
+set /a _INIT_ATTEMPTS+=1
+echo  [>>] Testing Ubuntu initialization (attempt %_INIT_ATTEMPTS% of 3)...
+
+set _WSL_TEST=
+for /f "delims=" %%O in ('wsl -d Ubuntu -- echo ready 2^>^&1') do set _WSL_TEST=%%O
+echo "%_WSL_TEST%" | find "ready" >nul 2>&1
+if %errorlevel% equ 0 goto wsl_initialized
+
+echo.
+echo  [!] Ubuntu needs first-time setup. A setup window may have appeared.
+echo.
+echo      Complete these steps in the Ubuntu window:
+echo        1) Enter a username when prompted
+echo        2) Enter and confirm a password when prompted
+echo        3) Type  exit  and press Enter to close the Ubuntu window
+echo.
+if %_INIT_ATTEMPTS% leq 3 (
+    pause
+    goto wsl_init_check
+)
+echo  [!] Ubuntu did not finish initialization after 3 attempts.
+echo      Open Ubuntu from the Start Menu, complete setup, then re-run this installer.
+echo.
+pause
+exit /b 1
+
+:wsl_initialized
+echo  [+] Ubuntu is initialized and ready
+echo.
+
+:: ─── Step 5b — Run bootstrap inside WSL Ubuntu (with one retry on failure) ──
 echo  ================================================================
 echo    Running Helios installer inside WSL Ubuntu...
 echo  ================================================================
@@ -118,19 +156,30 @@ echo  This will install: Pi CLI, Helios agents, skills, extensions,
 echo  Memgraph, Ollama, MCP servers, and configure your API keys.
 echo.
 
-wsl -d Ubuntu -- bash -c "curl -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh | bash"
+wsl -d Ubuntu -- bash -c "curl --max-time 120 -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh | bash"
 if %errorlevel% neq 0 (
     echo.
-    echo  [!] The Helios bootstrap script exited with an error.
+    echo  [!] Bootstrap exited with an error. Retrying once...
     echo.
-    echo      Check the output above for details.
-    echo      Common fixes:
-    echo        - Make sure Ubuntu WSL has internet access
-    echo        - Run:  wsl -d Ubuntu -- ping github.com
-    echo        - Retry this installer
+    echo      If you see errors above, common fixes:
+    echo        - Check internet:   wsl -d Ubuntu -- ping github.com
+    echo        - Check disk space in Ubuntu
     echo.
     pause
-    exit /b 1
+    wsl -d Ubuntu -- bash -c "curl --max-time 120 -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh | bash"
+    if %errorlevel% neq 0 (
+        echo.
+        echo  [!] Bootstrap failed after retry.
+        echo.
+        echo      Run this command directly inside Ubuntu to install manually:
+        echo.
+        echo        curl -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh ^| bash
+        echo.
+        echo      Open Ubuntu from the Start Menu, paste the command, and press Enter.
+        echo.
+        pause
+        exit /b 1
+    )
 )
 
 echo.
