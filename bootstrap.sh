@@ -94,6 +94,8 @@ cat << 'BANNER'
   ╚═══════════════════════════════════════════════════════════════╝
 BANNER
 echo -e "${RESET}"
+echo -e "  ${DIM}Setting up prerequisites — this may take 1-2 minutes...${RESET}"
+echo ""
 
 # ─── Auto-install Prerequisites ───────────────────────────────────────────────
 echo -e "  ${BOLD}Installing prerequisites...${RESET}"
