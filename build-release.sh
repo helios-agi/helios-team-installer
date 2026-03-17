@@ -274,6 +274,13 @@ for pkg in "${PACKAGES[@]}"; do
       --exclude='node_modules/' \
       --exclude='.venv/' \
       --exclude='__pycache__/' \
+      --exclude='*.mp4' \
+      --exclude='*.png' \
+      --exclude='*.gif' \
+      --exclude='*.webm' \
+      --exclude='.pi/' \
+      --exclude='dist/' \
+      --exclude='*.log' \
       "${HOME}/.pi/agent/git/github.com/sweetcheeks72/${pkg}/" \
       "${BUNDLE_GIT_DIR}/${pkg}/"
     ((bundled++)) || true
@@ -282,6 +289,15 @@ for pkg in "${PACKAGES[@]}"; do
     rsync -aL \
       --exclude='.git/' \
       --exclude='node_modules/' \
+      --exclude='.venv/' \
+      --exclude='__pycache__/' \
+      --exclude='*.mp4' \
+      --exclude='*.png' \
+      --exclude='*.gif' \
+      --exclude='*.webm' \
+      --exclude='.pi/' \
+      --exclude='dist/' \
+      --exclude='*.log' \
       --exclude='.venv/' \
       --exclude='__pycache__/' \
       "${HOME}/.pi/agent/git/github.com/nicobailon/${pkg}/" \
