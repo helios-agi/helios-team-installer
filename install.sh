@@ -1639,7 +1639,7 @@ dedup_skills_extensions() {
   local legacy_exts=("pi-review-loop")
   for legacy_ext in "${legacy_exts[@]}"; do
     if [[ -d "$PI_AGENT_DIR/extensions/$legacy_ext" ]] && \
-       [[ -d "$PI_AGENT_DIR/git/github.com/nicobailon/$legacy_ext" ]]; then
+       [[ -d "$PI_AGENT_DIR/git/github.com/sweetcheeks72/$legacy_ext" ]]; then
       info "Removing legacy extension $legacy_ext (now provided by git package)"
       rm -rf "$PI_AGENT_DIR/extensions/$legacy_ext"
     fi
@@ -2007,7 +2007,7 @@ deduplicate_extensions() {
   local dominated_exts=("pi-review-loop")
   for ext in "${dominated_exts[@]}"; do
     local local_ext="$PI_AGENT_DIR/extensions/$ext"
-    local git_ext="$PI_AGENT_DIR/git/github.com/nicobailon/$ext"
+    local git_ext="$PI_AGENT_DIR/git/github.com/sweetcheeks72/$ext"
     if [[ -d "$local_ext" ]] && [[ -d "$git_ext" ]]; then
       info "Removing duplicate: $local_ext (git package $git_ext takes precedence)"
       rm -rf "$local_ext"
@@ -2241,6 +2241,12 @@ main() {
   echo -e "  ${DIM}Estimated time: 3-5 minutes.${RESET}"
   echo ""
   detect_update_mode "$@"
+
+  # Adjust step counter for update mode (only 3 of 14 steps run)
+  if [[ "$UPDATE_MODE" == true ]]; then
+    TOTAL_STEPS=3
+    CURRENT_STEP=0
+  fi
 
   # ─── Check for --fresh flag (for checkpoint system) ──────────────────────
   FRESH_INSTALL=false
