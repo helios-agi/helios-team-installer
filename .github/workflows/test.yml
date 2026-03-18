@@ -109,22 +109,64 @@ jobs:
           }
           Write-Host "install.ps1 — no syntax errors"
 
-      - name: Batch file syntax check (install.bat)
-        shell: cmd
+      - name: Batch file lint checks (install.bat)
+        shell: pwsh
         run: |
-          REM Basic syntax validation — check for common errors
-          findstr /n "wsl.*wsl" install.bat && (
-            echo ERROR: Double wsl invocation detected in install.bat
-            exit /b 1
-          )
-          echo install.bat — no double-invocation patterns found
-
-      - name: Anti-regression — no unquoted bash -c wsl patterns
-        shell: bash
-        run: |
-          echo "Checking for 'bash -c wsl' anti-pattern..."
-          if grep -n "bash -c wsl" install.ps1 install.bat 2>/dev/null; then
-            echo "ERROR: Found 'bash -c wsl' pattern — this causes 'command not found' inside WSL"
+          $content = Get-Content install.bat -Raw
+          
+          # Check 1: No double wsl invocations (regex)
+          $doubleWsl = Select-String -Path install.bat -Pattern 'wsl.*-d.*bash\s+-c\s+wsl' -AllMatches
+          if ($doubleWsl) {
+            Write-Error "Double wsl invocation detected:"
+            $doubleWsl | ForEach-Object { Write-Error $_.Line }
             exit 1
-          fi
-          echo "No anti-patterns found ✓"
+          }
+          Write-Host "No double wsl invocations found ✓"
+          
+          # Check 2: No hardcoded 'wsl -d Ubuntu' (should use %_UBUNTU_DISTRO%)
+          # Exclude comments (lines starting with ::) and the wsl --install line
+          $hardcoded = Get-Content install.bat | Where-Object { 
+            $_ -match 'wsl\s+-d\s+Ubuntu\b' -and $_ -notmatch '^::' -and $_ -notmatch 'wsl --install'
+          }
+          if ($hardcoded) {
+            Write-Error "Hardcoded 'wsl -d Ubuntu' found (should use %_UBUNTU_DISTRO%):"
+            $hardcoded | ForEach-Object { Write-Error $_ }
+            exit 1
+          }
+          Write-Host "No hardcoded Ubuntu distro names ✓"
+
+      - name: Anti-regression checks
+        shell: pwsh
+        run: |
+          $failed = $false
+          
+          # Check 1: No 'bash -c wsl' pattern (causes command-not-found inside WSL)
+          $bashCWsl = Select-String -Path install.ps1,install.bat -Pattern 'bash\s+-c\s+wsl' -AllMatches 2>$null
+          if ($bashCWsl) {
+            Write-Error "Found 'bash -c wsl' anti-pattern (causes command-not-found inside WSL):"
+            $bashCWsl | ForEach-Object { Write-Error "$($_.Filename):$($_.LineNumber): $($_.Line)" }
+            $failed = $true
+          }
+          
+          # Check 2: No hardcoded 'wsl -d Ubuntu' in install.ps1 (should use $ubuntuDistro)
+          $ps1Hardcoded = Get-Content install.ps1 | Where-Object {
+            $_ -match 'wsl\s+-d\s+Ubuntu\b' -and $_ -notmatch '^\s*#' -and $_ -notmatch 'wsl --install'
+          }
+          if ($ps1Hardcoded) {
+            Write-Error "Hardcoded 'wsl -d Ubuntu' in install.ps1:"
+            $ps1Hardcoded | ForEach-Object { Write-Error $_ }
+            $failed = $true
+          }
+          
+          # Check 3: No hardcoded 'wsl -d Ubuntu' in install.bat (should use %_UBUNTU_DISTRO%)
+          $batHardcoded = Get-Content install.bat | Where-Object {
+            $_ -match 'wsl\s+-d\s+Ubuntu\b' -and $_ -notmatch '^::' -and $_ -notmatch 'wsl --install'
+          }
+          if ($batHardcoded) {
+            Write-Error "Hardcoded 'wsl -d Ubuntu' in install.bat:"
+            $batHardcoded | ForEach-Object { Write-Error $_ }
+            $failed = $true
+          }
+          
+          if ($failed) { exit 1 }
+          Write-Host "All anti-regression checks passed ✓"

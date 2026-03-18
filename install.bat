@@ -108,22 +108,22 @@ if %errorlevel% neq 0 (
 )
 
 :: Detect actual Ubuntu distro name (Ubuntu, Ubuntu-22.04, Ubuntu-24.04, etc.)
+:: Use PowerShell to avoid UTF-16 encoding issues from wsl -l -q
 set "_UBUNTU_DISTRO="
-for /f "usebackq tokens=*" %%D in (`wsl -l -q 2^>nul ^| findstr /i "Ubuntu"`) do (
+for /f "usebackq delims=" %%D in (`powershell -NoProfile -Command "(wsl -l -q | Where-Object { $_ -match '^Ubuntu' } | Select-Object -First 1).Trim()"`) do (
     set "_UBUNTU_DISTRO=%%D"
-    goto :distro_found
 )
-:distro_found
-
-:: Strip any trailing whitespace or null bytes (batch quirk on some Windows versions)
-for /f "tokens=* delims= " %%A in ("%_UBUNTU_DISTRO%") do set "_UBUNTU_DISTRO=%%A"
 
 if "%_UBUNTU_DISTRO%"=="" (
-    echo  [!] Could not detect Ubuntu distro name. Using default "Ubuntu"
-    set "_UBUNTU_DISTRO=Ubuntu"
+    echo  [!] No Ubuntu distribution found in WSL.
+    echo      Available distributions:
+    wsl -l -v
+    echo.
+    echo      Install Ubuntu with:  wsl --install -d Ubuntu
+    exit /b 1
 )
 
-echo  [+] Ubuntu found in WSL — OK (distro: %_UBUNTU_DISTRO%)
+echo  [+] Detected Ubuntu distro: %_UBUNTU_DISTRO%
 echo.
 
 :: ─── Step 5a — Verify Ubuntu has completed first-run initialization ──────────
