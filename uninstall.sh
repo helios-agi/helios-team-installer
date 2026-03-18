@@ -83,18 +83,18 @@ if [[ -d "$PI_DIR" ]]; then
   fi
 fi
 
-# ─── 3. Remove Pi CLI ─────────────────────────────────────────────────────────
-if command -v pi &>/dev/null; then
-  ask "Remove Pi CLI (npm uninstall -g @helios-agent/cli)? [y/N]:"
+# ─── 3. Remove Helios CLI ─────────────────────────────────────────────────────────
+if command -v helios &>/dev/null; then
+  ask "Remove Helios CLI (npm uninstall -g @helios-agent/cli)? [y/N]:"
   read -r remove_pi_cli
   if [[ "$remove_pi_cli" =~ ^[Yy]$ ]]; then
     if npm uninstall -g @helios-agent/cli 2>/dev/null; then
-      success "Pi CLI removed"
+      success "Helios CLI removed"
     else
-      warn "Could not remove Pi CLI automatically — run: npm uninstall -g @helios-agent/cli"
+      warn "Could not remove Helios CLI automatically — run: npm uninstall -g @helios-agent/cli"
     fi
   else
-    info "Keeping Pi CLI"
+    info "Keeping Helios CLI"
   fi
 fi
 
