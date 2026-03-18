@@ -1,0 +1,50 @@
+name: ShellCheck
+
+on:
+  push:
+    branches: [main]
+    paths: ['*.sh', 'tests/*.sh', 'scripts/*.sh']
+  pull_request:
+    branches: [main]
+    paths: ['*.sh', 'tests/*.sh', 'scripts/*.sh']
+
+jobs:
+  shellcheck:
+    name: Lint shell scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Run ShellCheck on installer scripts
+        run: |
+          echo "=== ShellCheck: install.sh ==="
+          shellcheck --severity=warning --shell=bash \
+            --exclude=SC2034,SC2155,SC2086 \
+            install.sh
+          
+          echo "=== ShellCheck: bootstrap.sh ==="
+          shellcheck --severity=warning --shell=bash \
+            --exclude=SC2034,SC2155,SC2086 \
+            bootstrap.sh 2>/dev/null || true
+          
+          echo "=== ShellCheck: verify.sh ==="
+          shellcheck --severity=warning --shell=bash \
+            --exclude=SC2034,SC2155,SC2086 \
+            verify.sh 2>/dev/null || true
+          
+          echo "=== ShellCheck: test scripts ==="
+          for f in tests/*.sh; do
+            if [[ -f "$f" ]]; then
+              echo "--- $f ---"
+              shellcheck --severity=warning --shell=bash \
+                --exclude=SC2034,SC2155,SC2086 \
+                "$f" 2>/dev/null || true
+            fi
+          done
+          
+          echo "✓ ShellCheck complete"

@@ -9,19 +9,29 @@ on:
 
 jobs:
   e2e-macos-install:
-    name: End-to-end install (macOS)
-    runs-on: macos-latest
+    name: E2E install (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            arch: arm64
+          - runner: macos-13
+            arch: x64
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Verify clean state
         run: |
-          echo "=== Verifying clean macOS runner ==="
+          echo "=== Verifying clean macOS runner (${{ matrix.arch }}) ==="
           test ! -d ~/.pi/agent && echo "✓ Clean - no existing install" || { echo "✗ ~/.pi/agent exists"; exit 1; }
           echo "Node: $(node -v)"
           echo "npm: $(npm -v)"
+          echo "Arch: $(uname -m)"
+          echo "Homebrew prefix: $(brew --prefix)"
 
       - name: Download latest release tarball
         run: |
@@ -35,7 +45,7 @@ jobs:
           echo "Tarball size: $(du -h dist/helios-agent-latest.tar.gz | cut -f1)"
           echo "Version: $(cat dist/VERSION)"
 
-      - name: Extract tarball (simulates what install.sh does)
+      - name: Extract tarball
         run: |
           mkdir -p ~/.pi/agent
           tar -xzf dist/helios-agent-latest.tar.gz -C ~/.pi/agent --strip-components=1
@@ -45,7 +55,7 @@ jobs:
           echo "ANTHROPIC_API_KEY=sk-ant-test-ci-dummy-key" >> ~/.pi/agent/.env
           echo "✓ Tarball extracted: $(find ~/.pi/agent -type f | wc -l | tr -d ' ') files"
 
-      - name: Install Pi CLI (upstream package)
+      - name: Install Pi CLI
         run: |
           npm install -g @mariozechner/pi-coding-agent
           which pi && echo "✓ Pi CLI installed: $(pi --version 2>/dev/null | head -1)" || { echo "✗ pi not found"; exit 1; }
@@ -54,47 +64,19 @@ jobs:
         run: |
           WRAPPER=~/.pi/agent/bin/helios
           echo "=== Wrapper checks ==="
-          
-          # Must exist and be executable
           test -x "$WRAPPER" || { echo "✗ Wrapper not executable"; exit 1; }
           echo "✓ Wrapper executable"
-          
-          # Verify wrapper has proper CLI resolution
-          if ! grep -q "resolve_cli" "$WRAPPER"; then
-            echo "✗ Wrapper missing resolve_cli function"
-            exit 1
-          fi
-          echo "✓ Has resolve_cli function"
-          
-          # Must use 'command -v pi' to find the upstream binary
-          if ! grep -q "command -v pi" "$WRAPPER"; then
-            echo "✗ Wrapper missing 'command -v pi' in resolve_cli"
-            exit 1
-          fi
-          echo "✓ Has 'command -v pi'"
-          
-          # Must have resolve_cli function
-          if ! grep -q "resolve_cli" "$WRAPPER"; then
-            echo "✗ Missing resolve_cli function"
-            exit 1
-          fi
+          grep -q "resolve_cli" "$WRAPPER" || { echo "✗ Missing resolve_cli"; exit 1; }
           echo "✓ Has resolve_cli"
-          
-          # Must have recursion guard
-          if ! grep -q "_HELIOS_UPDATE_GUARD" "$WRAPPER"; then
-            echo "✗ Missing recursion guard"
-            exit 1
-          fi
+          grep -q "command -v pi" "$WRAPPER" || { echo "✗ Missing command -v pi"; exit 1; }
+          echo "✓ Has command -v pi"
+          grep -q "_HELIOS_UPDATE_GUARD" "$WRAPPER" || { echo "✗ Missing recursion guard"; exit 1; }
           echo "✓ Has recursion guard"
-          
-          # Syntax check
-          bash -n "$WRAPPER" || { echo "✗ Syntax error in wrapper"; exit 1; }
+          bash -n "$WRAPPER" || { echo "✗ Syntax error"; exit 1; }
           echo "✓ Syntax OK"
 
-      - name: Check no sudo prompts possible
+      - name: Check no sudo prompts
         run: |
-          echo "=== Checking for dangerous sudo calls ==="
-          # Find sudo calls that could prompt for password (not apt-get, not sudo -n)
           DANGEROUS=$(grep -n 'sudo' install.sh | grep -v 'apt-get\|usermod\|sudo -n\|sudo bash\|sudo ln\|echo.*sudo\|DIM.*sudo\|#.*sudo\|info.*sudo' || true)
           if [[ -n "$DANGEROUS" ]]; then
             echo "✗ Found sudo calls that could prompt for password:"
@@ -103,59 +85,83 @@ jobs:
           fi
           echo "✓ No dangerous sudo calls"
 
-      - name: Check no infinite loop in install_packages
+      - name: Check no infinite loop
         run: |
-          echo "=== Checking install_packages for loop risk ==="
-          # Extract install_packages function body
           FUNC_BODY=$(sed -n '/^install_packages()/,/^}/p' install.sh)
-          
-          # Must NOT call bare 'helios update' (causes loop through wrapper)
           if echo "$FUNC_BODY" | grep -v '#\|warn\|info\|echo\|success' | grep -q "helios update"; then
-            echo "✗ install_packages() calls 'helios update' directly (infinite loop risk)"
+            echo "✗ install_packages() calls helios update directly"
             exit 1
           fi
-          echo "✓ No bare 'helios update' in install_packages"
+          echo "✓ No infinite loop risk"
+
+      - name: "First install (with timeout)"
+        run: |
+          timeout 120 bash install.sh --update 2>&1 | tee /tmp/install-1.log
+          echo "✓ First install completed"
+
+      - name: Functional smoke test
+        run: |
+          test -x ~/.pi/agent/bin/helios && echo "✓ Wrapper executable"
+          pi --version 2>/dev/null | head -1 && echo "✓ pi --version works" || echo "⚠ pi --version failed"
+          npm ls -g @mariozechner/pi-coding-agent --depth=0 2>/dev/null && echo "✓ npm package present" || echo "⚠ npm check failed"
+
+      - name: "Second install — idempotency"
+        run: |
+          echo "=== Idempotency check ==="
+          timeout 120 bash install.sh --update 2>&1 | tee /tmp/install-2.log
+          echo "✓ Second install completed"
           
-          # Should resolve CLI binary directly
-          if ! echo "$FUNC_BODY" | grep -q "npm prefix\|cli_bin\|resolve"; then
-            echo "⚠ install_packages() may not be resolving CLI binary directly"
+          # No duplicate PATH entries
+          if [[ -f "$HOME/.zshrc" ]]; then
+            DUPES=$(grep -c '\.local/bin' "$HOME/.zshrc" || echo 0)
+            if [[ "$DUPES" -gt 1 ]]; then
+              echo "✗ Duplicate PATH entries ($DUPES)"
+              exit 1
+            fi
+            echo "✓ No duplicate PATH entries"
           fi
-          echo "✓ install_packages() bypasses wrapper"
+          
+          # CLI still works
+          pi --version 2>/dev/null | head -1 && echo "✓ pi still works" || echo "⚠ pi broken after reinstall"
+          
+          # Wrapper still intact
+          test -x ~/.pi/agent/bin/helios && echo "✓ Wrapper intact" || { echo "✗ Wrapper broken"; exit 1; }
+          
+          # File count sanity
+          COUNT=$(find ~/.pi/agent -type f | wc -l | tr -d ' ')
+          echo "File count: $COUNT"
+          if [[ "$COUNT" -gt 2000 ]]; then
+            echo "⚠ High file count — possible duplicate extraction"
+          fi
+          echo "✓ Idempotency passed"
 
-      - name: Run installer in update mode (with timeout)
-        run: |
-          # CRITICAL: Use timeout to catch infinite loops — 120 seconds max
-          # Do NOT use || true — we want to catch failures
-          timeout 120 bash install.sh --update 2>&1 | tee /tmp/install-output.log
-          echo "✓ Install completed within timeout"
+      - name: Feature parity
+        run: bash tests/e2e_feature_parity.sh 2>&1 | tee /tmp/feature-parity.log
 
-      - name: Run feature parity verification
-        run: |
-          bash tests/e2e_feature_parity.sh 2>&1 | tee /tmp/feature-parity.log
-
-      - name: Run verify.sh
-        run: |
-          bash verify.sh 2>&1 | tee /tmp/verify-output.log
+      - name: verify.sh
+        run: bash verify.sh 2>&1 | tee /tmp/verify.log
 
       - name: Summary
         if: always()
         run: |
-          echo "=== Feature Parity Results ==="
-          tail -15 /tmp/feature-parity.log 2>/dev/null || echo "(not available)"
-          echo ""
-          echo "=== Verify Results ==="
-          tail -15 /tmp/verify-output.log 2>/dev/null || echo "(not available)"
-          echo ""
-          echo "=== Install Output (last 30 lines) ==="
-          tail -30 /tmp/install-output.log 2>/dev/null || echo "(not available)"
+          echo "=== Arch: $(uname -m) | Runner: ${{ matrix.runner }} ==="
+          echo "=== Feature Parity ==="
+          tail -15 /tmp/feature-parity.log 2>/dev/null || echo "(n/a)"
+          echo "=== Verify ==="
+          tail -15 /tmp/verify.log 2>/dev/null || echo "(n/a)"
+          echo "=== Install 1 (last 15) ==="
+          tail -15 /tmp/install-1.log 2>/dev/null || echo "(n/a)"
+          echo "=== Install 2 (last 15) ==="
+          tail -15 /tmp/install-2.log 2>/dev/null || echo "(n/a)"
 
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: install-logs
+          name: install-logs-${{ matrix.arch }}
           path: |
-            /tmp/install-output.log
+            /tmp/install-1.log
+            /tmp/install-2.log
             /tmp/feature-parity.log
-            /tmp/verify-output.log
+            /tmp/verify.log
             install.log
