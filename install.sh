@@ -421,7 +421,7 @@ install_pi() {
   if [[ -d "$HOME/.npm" ]]; then
     if ! npm cache verify >> "$LOG_FILE" 2>&1; then
       warn "npm cache issue detected — repairing..."
-      sudo chown -R "$(whoami)" "$HOME/.npm" >> "$LOG_FILE" 2>&1 || true
+      chown -R "$(whoami)" "$HOME/.npm" >> "$LOG_FILE" 2>&1 || true
       npm cache clean --force >> "$LOG_FILE" 2>&1 || true
     fi
   fi
@@ -433,7 +433,7 @@ install_pi() {
   else
     # Retry with full cache nuke
     warn "First attempt failed — clearing npm cache and retrying..."
-    sudo chown -R "$(whoami)" "$HOME/.npm" >> "$LOG_FILE" 2>&1 || true
+    chown -R "$(whoami)" "$HOME/.npm" >> "$LOG_FILE" 2>&1 || true
     npm cache clean --force >> "$LOG_FILE" 2>&1 || true
     
     if run_with_spinner "Retrying Helios CLI install" \
