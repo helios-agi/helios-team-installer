@@ -1331,7 +1331,7 @@ setup_mcp_servers() {
   # Warm up mcp-memgraph binary
   if command -v uvx &>/dev/null; then
     info "Caching mcp-memgraph server..."
-    uvx --from mcp-memgraph mcp-memgraph --help >> "$LOG_FILE" 2>&1 &
+    timeout 30 uvx --from mcp-memgraph mcp-memgraph --help >> "$LOG_FILE" 2>&1 || true
     success "mcp-memgraph (Bolt → MCP bridge)"
   fi
 
@@ -2229,6 +2229,12 @@ main() {
     }
     install_helios_cli
     select_provider     # Interactive: choose AI provider
+  fi
+
+  # Ensure Pi is available before running packages (may have been uninstalled)
+  if ! command -v pi &>/dev/null; then
+    warn "Pi CLI not found — installing..."
+    install_pi
   fi
 
   install_packages
