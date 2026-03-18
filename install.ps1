@@ -189,7 +189,9 @@ if (-not $ubuntuReady) {
                 Write-OK "Applied RSA compatibility fix"
             }
         }
-    } catch { }
+    } catch {
+        Write-Warn "Could not apply RSA fix (may require admin) — WSL install may hang on some machines"
+    }
 
     try {
         & wsl --install -d Ubuntu 2>&1 | ForEach-Object { Write-Host "    $_" }
