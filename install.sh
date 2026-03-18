@@ -2,7 +2,7 @@
 # =============================================================================
 # Helios + Pi Team Installer
 # =============================================================================
-# Installs: Pi CLI, Helios Agent, 20 git packages, extensions, Familiar skills,
+# Installs: Helios CLI, Helios Agent, 20 git packages, extensions, Familiar skills,
 # API key setup
 # =============================================================================
 INSTALLER_VERSION="2.1.0"
@@ -405,17 +405,17 @@ check_prerequisites() {
 
 # ─── Pi Installation ──────────────────────────────────────────────────────────
 install_pi() {
-  step "Pi CLI"
+  step "Helios CLI"
 
-  if command -v pi &>/dev/null; then
+  if command -v helios &>/dev/null; then
     local pi_ver
-    pi_ver=$(pi --version 2>/dev/null | head -1 || echo "unknown")
-    success "Pi already installed: $pi_ver"
+    pi_ver=$(helios --version 2>/dev/null | head -1 || echo "unknown")
+    success "Helios already installed: $pi_ver"
     PI_INSTALLED=true
     return 0
   fi
 
-  info "Pi not found — installing via npm..."
+  info "Helios not found — installing via npm..."
   
   # Pre-flight: fix npm cache permissions (common macOS issue when npm was run with sudo)
   if [[ -d "$HOME/.npm" ]]; then
@@ -426,22 +426,22 @@ install_pi() {
     fi
   fi
   
-  if run_with_spinner "Installing Pi CLI (@helios-agent/cli)" \
+  if run_with_spinner "Installing Helios CLI (@helios-agent/cli)" \
       npm install -g @helios-agent/cli; then
     PI_INSTALLED=true
-    success "Pi installed: $(pi --version 2>/dev/null | tail -1 || echo 'ok')"
+    success "Helios installed: $(helios --version 2>/dev/null | tail -1 || echo 'ok')"
   else
     # Retry with full cache nuke
     warn "First attempt failed — clearing npm cache and retrying..."
     sudo chown -R "$(whoami)" "$HOME/.npm" >> "$LOG_FILE" 2>&1 || true
     npm cache clean --force >> "$LOG_FILE" 2>&1 || true
     
-    if run_with_spinner "Retrying Pi CLI install" \
+    if run_with_spinner "Retrying Helios CLI install" \
         npm install -g @helios-agent/cli; then
       PI_INSTALLED=true
-      success "Pi installed on retry: $(pi --version 2>/dev/null | tail -1 || echo 'ok')"
+      success "Helios installed on retry: $(helios --version 2>/dev/null | tail -1 || echo 'ok')"
     else
-      error "Failed to install Pi CLI."
+      error "Failed to install Helios CLI."
       echo ""
       echo -e "  ${BOLD}Manual fix:${RESET}"
       echo -e "    ${DIM}sudo chown -R \$(whoami) ~/.npm${RESET}"
@@ -787,7 +787,7 @@ install_packages() {
 
   if [[ "$bundled_count" -ge 15 ]]; then
     success "Packages pre-bundled in tarball ($bundled_count packages)"
-    info "Running pi update to verify and sync..."
+    info "Running helios update to verify and sync..."
   else
     info "Downloading packages — this may take 2-3 minutes"
   fi
@@ -797,12 +797,12 @@ install_packages() {
     cp "$INSTALLER_DIR/provider-configs/anthropic.json" "$PI_AGENT_DIR/settings.json"
   fi
 
-  run_with_spinner "Running pi update (installing/verifying packages)" \
-    pi update || {
+  run_with_spinner "Running helios update (installing/verifying packages)" \
+    helios update || {
     if [[ "$bundled_count" -ge 15 ]]; then
-      warn "pi update had issues, but bundled packages are available"
+      warn "helios update had issues, but bundled packages are available"
     else
-      warn "pi update had issues — packages may need manual installation"
+      warn "helios update had issues — packages may need manual installation"
     fi
     return 0
   }
@@ -1696,10 +1696,10 @@ run_verification() {
   local all_ok=true
 
   # Pi responds
-  if command -v pi &>/dev/null; then
-    success "pi binary found: $(which pi)"
+  if command -v helios &>/dev/null; then
+    success "helios binary found: $(which helios)"
   else
-    error "pi binary not in PATH"
+    error "helios binary not in PATH"
     all_ok=false
   fi
 
@@ -2237,7 +2237,7 @@ main() {
 
   print_banner
   echo -e "  ${BOLD}Starting Helios installation...${RESET}"
-  echo -e "  ${DIM}This will install Pi CLI, Helios agent, and supporting tools.${RESET}"
+  echo -e "  ${DIM}This will install Helios CLI, Helios agent, and supporting tools.${RESET}"
   echo -e "  ${DIM}Estimated time: 3-5 minutes.${RESET}"
   echo ""
   detect_update_mode "$@"
@@ -2268,15 +2268,15 @@ main() {
 
   if [[ "$UPDATE_MODE" == false ]]; then
     run_step "Prerequisites"     check_prerequisites
-    run_step "Pi CLI"            install_pi
+    run_step "Helios CLI"            install_pi
     run_step "Helios Agent"      setup_helios_agent
     run_step "Helios CLI"        install_helios_cli
     run_step "Provider Selection" select_provider
   fi
 
   # Ensure Pi is available before running packages (may have been uninstalled)
-  if ! command -v pi &>/dev/null; then
-    warn "Pi CLI not found — installing..."
+  if ! command -v helios &>/dev/null; then
+    warn "Helios CLI not found — installing..."
     install_pi
   fi
 

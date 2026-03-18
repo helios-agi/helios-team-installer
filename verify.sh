@@ -79,11 +79,11 @@ echo ""
 # ─── 1. Core Binaries ─────────────────────────────────────────────────────────
 section "1. Core Binaries"
 
-if command -v pi &>/dev/null; then
-  pi_ver=$(pi --version 2>/dev/null | tail -1 || echo "unknown")
-  check_pass "pi binary: $pi_ver ($(which pi))"
+if command -v helios &>/dev/null; then
+  pi_ver=$(helios --version 2>/dev/null | tail -1 || echo "unknown")
+  check_pass "helios binary: $pi_ver ($(which helios))"
 else
-  check_fail "pi binary not found — run: npm install -g @helios-agent/cli"
+  check_fail "helios binary not found — run: npm install -g @helios-agent/cli"
   auto_fix 'Install Pi CLI' 'npm install -g @helios-agent/cli'
 fi
 
@@ -130,7 +130,7 @@ for dir in agents skills extensions; do
     check_pass "~/.pi/agent/$dir/ — $count files"
   else
     check_warn "~/.pi/agent/$dir/ not found"
-    auto_fix 'Run pi update' 'pi update'
+    auto_fix 'Run helios update' 'helios update'
   fi
 done
 
@@ -142,11 +142,11 @@ if [[ -d "$PI_AGENT_DIR/agents" ]]; then
   if [[ "$agent_count" -ge 40 ]]; then
     check_pass "Agents: $agent_count (✓ expect 40+)"
   elif [[ "$agent_count" -ge 20 ]]; then
-    check_warn "Agents: $agent_count (expected 40+) — run: pi update"
-    auto_fix 'Run pi update' 'pi update'
+    check_warn "Agents: $agent_count (expected 40+) — run: helios update"
+    auto_fix 'Run helios update' 'helios update'
   else
     check_fail "Agents: $agent_count (expected 40+) — packages may not be installed"
-    auto_fix 'Run pi update' 'pi update'
+    auto_fix 'Run helios update' 'helios update'
   fi
 
   # Check critical agents
@@ -155,12 +155,12 @@ if [[ -d "$PI_AGENT_DIR/agents" ]]; then
       check_pass "Agent exists: $agent"
     else
       check_warn "Agent missing: $agent"
-      auto_fix 'Run pi update' 'pi update'
+      auto_fix 'Run helios update' 'helios update'
     fi
   done
 else
   check_fail "~/.pi/agent/agents/ not found"
-  auto_fix 'Run pi update' 'pi update'
+  auto_fix 'Run helios update' 'helios update'
 fi
 
 # ─── 4. Skills ────────────────────────────────────────────────────────────────
@@ -185,10 +185,10 @@ if [[ "$skill_count" -ge 13 ]]; then
   check_pass "Total skills: $skill_count (✓ expect 13+)"
 elif [[ "$skill_count" -gt 0 ]]; then
   check_warn "Total skills: $skill_count (expected 13+)"
-  auto_fix 'Run pi update' 'pi update'
+  auto_fix 'Run helios update' 'helios update'
 else
   check_fail "No skills found"
-  auto_fix 'Run pi update' 'pi update'
+  auto_fix 'Run helios update' 'helios update'
 fi
 
 # ─── 5. Extensions ────────────────────────────────────────────────────────────
@@ -236,15 +236,15 @@ if [[ -d "$PI_AGENT_DIR/git" ]]; then
   if [[ "$pkg_count" -ge 18 ]]; then
     check_pass "Git packages: $pkg_count installed (✓ expect 18+)"
   elif [[ "$pkg_count" -gt 0 ]]; then
-    check_warn "Git packages: $pkg_count installed (expected 18+) — run: pi update"
-    auto_fix 'Run pi update' 'pi update'
+    check_warn "Git packages: $pkg_count installed (expected 18+) — run: helios update"
+    auto_fix 'Run helios update' 'helios update'
   else
-    check_fail "Git packages: none found — run: pi update"
-    auto_fix 'Run pi update' 'pi update'
+    check_fail "Git packages: none found — run: helios update"
+    auto_fix 'Run helios update' 'helios update'
   fi
 else
   check_fail "~/.pi/agent/git/ not found — pi update has not been run"
-  auto_fix 'Run pi update' 'pi update'
+  auto_fix 'Run helios update' 'helios update'
 fi
 
 # Check critical packages individually
@@ -528,14 +528,14 @@ if [[ -f "$sg_dir/ingest-episodes.js" ]]; then
   check_pass "ingest-episodes.js present"
 else
   check_warn "ingest-episodes.js missing — pull latest helios-agent"
-  auto_fix 'Run pi update' 'pi update'
+  auto_fix 'Run helios update' 'helios update'
 fi
 
 if [[ -f "$sg_dir/memory-recall.js" ]]; then
   check_pass "memory-recall.js present"
 else
   check_warn "memory-recall.js missing — pull latest helios-agent"
-  auto_fix 'Run pi update' 'pi update'
+  auto_fix 'Run helios update' 'helios update'
 fi
 
 # ─── 11. MCP Toolchain ───────────────────────────────────────────────────────
@@ -600,7 +600,7 @@ if [[ -d "$gov_dir" ]]; then
   fi
 else
   check_warn "Governance extension not found"
-  auto_fix 'Run pi update' 'pi update'
+  auto_fix 'Run helios update' 'helios update'
 fi
 
 # ─── Report Card ──────────────────────────────────────────────────────────────
