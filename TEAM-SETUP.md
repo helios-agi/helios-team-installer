@@ -328,7 +328,7 @@ curl -I https://github.com
 git config --global http.proxy http://your-proxy:port
 
 # Try updating a single package to isolate the issue:
-pi update git:github.com/nicobailon/pi-subagents
+pi update git:github.com/sweetcheeks72/pi-subagents
 ```
 
 ### Agents count is low (< 40)
