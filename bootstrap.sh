@@ -32,7 +32,7 @@ if [[ ! -t 0 ]]; then
 fi
 
 # ─── Immediate output — user sees this first, before anything can hang ────────
-if [[ -t 1 ]] && [[ "${NO_COLOR:-}" != "1" ]] && [[ "${TERM:-dumb}" != "dumb" ]]; then
+if [[ -t 1 ]] && [[ -z "${NO_COLOR:-}" ]] && [[ "${TERM:-dumb}" != "dumb" ]]; then
   RED='\033[0;31m'
   GREEN='\033[0;32m'
   YELLOW='\033[1;33m'
@@ -48,6 +48,13 @@ PLATFORM="$(uname -s)"
 ARCH="$(uname -m)"
 INSTALLER_DIR="$HOME/helios-team-installer"
 INSTALLER_REPO="https://github.com/sweetcheeks72/helios-team-installer.git"
+
+# Source shared platform detection lib (only available after installer is cloned)
+_source_platform_lib() {
+  if [[ -f "$INSTALLER_DIR/lib/platform.sh" ]]; then
+    source "$INSTALLER_DIR/lib/platform.sh"
+  fi
+}
 
 echo ""
 echo -e "${BOLD}${CYAN}"
@@ -254,6 +261,10 @@ else
 fi
 
 echo -e "  ${GREEN}✓${RESET} Installer ready at $INSTALLER_DIR"
+
+# Source shared platform lib now that the installer directory is available
+_source_platform_lib
+
 echo ""
 
 # ─── Hand off to full installer ──────────────────────────────────────────────

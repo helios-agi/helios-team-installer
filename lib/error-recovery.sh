@@ -76,8 +76,6 @@ retry_with_backoff() {
   local max_retries="$1"
   local description="$2"
   shift 2
-  local cmd=("$@")
-
   # Backoff delays (indexed from 0 = first retry)
   local backoff_delays="2 5 10 20"
   local attempt=0
@@ -382,20 +380,36 @@ offer_troubleshoot() {
 CHECKPOINT_FILE="${CHECKPOINT_FILE:-$HOME/.pi/agent/.install-checkpoint}"
 
 # save_checkpoint
-# Persists CURRENT_STEP to the checkpoint file.
+# Persists CURRENT_STEP (and metadata) to the checkpoint file as JSON.
 save_checkpoint() {
   mkdir -p "$(dirname "$CHECKPOINT_FILE")" 2>/dev/null || true
-  echo "$CURRENT_STEP" > "$CHECKPOINT_FILE"
+  cat > "$CHECKPOINT_FILE" << EOF
+{"step":$CURRENT_STEP,"stepName":"${_CURRENT_STEP_NAME:-unknown}","installerVersion":"${INSTALLER_VERSION:-unknown}"}
+EOF
 }
 
 # load_checkpoint
-# Echoes the last completed step number, or 0 if none.
+# Echoes the last completed step number, or 0 if none / version mismatch.
 load_checkpoint() {
-  if [ -f "$CHECKPOINT_FILE" ]; then
-    cat "$CHECKPOINT_FILE"
-  else
+  if [[ ! -f "$CHECKPOINT_FILE" ]]; then
     echo 0
+    return
   fi
+  local content
+  content="$(cat "$CHECKPOINT_FILE")"
+  # Handle legacy bare-integer format
+  if [[ "$content" =~ ^[0-9]+$ ]]; then
+    echo "$content"
+    return
+  fi
+  # Validate installer version matches
+  local saved_version
+  saved_version=$(echo "$content" | grep -o '"installerVersion":"[^"]*"' | cut -d'"' -f4)
+  if [[ "$saved_version" != "${INSTALLER_VERSION:-unknown}" ]]; then
+    echo 0  # Version mismatch — start fresh
+    return
+  fi
+  echo "$content" | grep -o '"step":[0-9]*' | grep -o '[0-9]*'
 }
 
 # clear_checkpoint
@@ -450,13 +464,16 @@ run_step() {
 
   # ── Run command ─────────────────────────────────────────────────────
   local exit_code=0
+  export _INSIDE_RUN_STEP=true
   if "${cmd[@]}" >"$tmp_output" 2>&1; then
+    _INSIDE_RUN_STEP=false
     step_done
     save_checkpoint
     rm -f "$tmp_output"
     return 0
   else
     exit_code=$?
+    _INSIDE_RUN_STEP=false
     local captured_output
     captured_output="$(cat "$tmp_output" 2>/dev/null)"
     rm -f "$tmp_output"

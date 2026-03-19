@@ -126,7 +126,11 @@ info()    { echo -e "${BLUE}  ℹ ${RESET}$*"; }
 success() { echo -e "${GREEN}  ✓ ${RESET}$*"; }
 warn()    { echo -e "${YELLOW}  ⚠ ${RESET}$*"; }
 error()   { echo -e "${RED}  ✗ ${RESET}$*"; }
-step()    { echo -e "\n${BOLD}${CYAN}▶ $*${RESET}"; }
+step()    {
+  # Skip if already inside run_step (step_start handles the header)
+  [[ "${_INSIDE_RUN_STEP:-}" == "true" ]] && return 0
+  echo -e "\n${BOLD}${CYAN}▶ $*${RESET}"
+}
 ask()     { echo -en "${MAGENTA}  ? ${RESET}$* "; }
 
 INSTALLER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -227,6 +231,27 @@ run_with_spinner() {
     rm -f "$tmp_err"
     return $cmd_exit
   fi
+}
+
+# Verify SHA256 checksum of a file against a checksum file.
+# Returns 0 on match (or no sha256 tool available), 1 on mismatch.
+_verify_sha256() {
+  local file="$1" checksum_file="$2"
+  local expected actual
+  expected="$(awk '{print $1}' "$checksum_file")"
+  if command -v sha256sum &>/dev/null; then
+    actual="$(sha256sum "$file" | awk '{print $1}')"
+  elif command -v shasum &>/dev/null; then
+    actual="$(shasum -a 256 "$file" | awk '{print $1}')"
+  else
+    warn "No sha256 tool found — skipping checksum verification"
+    return 0
+  fi
+  if [[ -n "$actual" ]] && [[ "$actual" != "$expected" ]]; then
+    warn "SHA256 mismatch (expected ${expected:0:12}..., got ${actual:0:12}...)"
+    return 1
+  fi
+  return 0
 }
 
 check_prerequisites() {
@@ -526,18 +551,8 @@ setup_helios_agent() {
     local tmp_checksum
     tmp_checksum="$(mktemp)"
     if _helios_download "$HELIOS_RELEASE_URL/$HELIOS_AGENT_TARBALL.sha256" "$tmp_checksum"; then
-      local expected_sha actual_sha
-      expected_sha="$(awk '{print $1}' "$tmp_checksum")"
-      if command -v sha256sum &>/dev/null; then
-        actual_sha="$(sha256sum "$tmp_tarball" | awk '{print $1}')"
-      elif command -v shasum &>/dev/null; then
-        actual_sha="$(shasum -a 256 "$tmp_tarball" | awk '{print $1}')"
-      else
-        warn "No sha256 tool found — skipping checksum verification"
-        actual_sha="$expected_sha"
-      fi
-      if [[ -n "$actual_sha" ]] && [[ "$actual_sha" != "$expected_sha" ]]; then
-        warn "SHA256 mismatch — aborting update"
+      if ! _verify_sha256 "$tmp_tarball" "$tmp_checksum"; then
+        warn "Tarball checksum mismatch — skipping extraction"
         rm -rf "$tmp_stash" "$tmp_tarball" "$tmp_checksum"
         cp -a "$backup_dir" "$PI_AGENT_DIR"
         return 0
@@ -597,18 +612,8 @@ setup_helios_agent() {
     local tmp_checksum
     tmp_checksum="$(mktemp)"
     if _helios_download "$HELIOS_RELEASE_URL/helios-agent-latest.tar.gz.sha256" "$tmp_checksum"; then
-      local expected_sha actual_sha
-      expected_sha="$(awk '{print $1}' "$tmp_checksum")"
-      if command -v sha256sum &>/dev/null; then
-        actual_sha="$(sha256sum "$tmp_tarball" | awk '{print $1}')"
-      elif command -v shasum &>/dev/null; then
-        actual_sha="$(shasum -a 256 "$tmp_tarball" | awk '{print $1}')"
-      else
-        warn "No sha256 tool found — skipping checksum verification"
-        actual_sha="$expected_sha"
-      fi
-      if [[ -n "$actual_sha" ]] && [[ "$actual_sha" != "$expected_sha" ]]; then
-        warn "SHA256 mismatch — aborting migration"
+      if ! _verify_sha256 "$tmp_tarball" "$tmp_checksum"; then
+        warn "Tarball checksum mismatch — skipping extraction"
         rm -rf "$tmp_stash" "$tmp_tarball" "$tmp_checksum"
         return 0
       fi
@@ -674,19 +679,8 @@ setup_helios_agent() {
   fi
 
   # Verify SHA256
-  local expected_sha actual_sha
-  expected_sha="$(awk '{print $1}' "$tmp_checksum")"
-  if command -v sha256sum &>/dev/null; then
-    actual_sha="$(sha256sum "$tmp_tarball" | awk '{print $1}')"
-  elif command -v shasum &>/dev/null; then
-    actual_sha="$(shasum -a 256 "$tmp_tarball" | awk '{print $1}')"
-  else
-    warn "No sha256 tool found — skipping checksum verification"
-    actual_sha="$expected_sha"
-  fi
-
-  if [[ "$actual_sha" != "$expected_sha" ]]; then
-    warn "SHA256 mismatch (expected $expected_sha, got $actual_sha) — aborting install"
+  if ! _verify_sha256 "$tmp_tarball" "$tmp_checksum"; then
+    warn "Tarball checksum mismatch — skipping extraction"
     rm -f "$tmp_tarball" "$tmp_checksum"
     return 1
   fi
@@ -799,13 +793,15 @@ install_packages() {
     # That's the wrapper, not the CLI. Try the pi binary name from our fork.
     cli_bin="$(npm prefix -g 2>/dev/null)/bin/pi" 2>/dev/null
   fi
-  # Final fallback: npx
-  if [[ ! -x "$cli_bin" ]]; then
-    cli_bin="npx @mariozechner/pi-coding-agent"
+  # Build CLI command array to avoid word-splitting on fallback path
+  local -a cli_cmd
+  if [[ -x "$cli_bin" ]]; then
+    cli_cmd=("$cli_bin")
+  else
+    cli_cmd=(npx @mariozechner/pi-coding-agent)
   fi
-  
-  run_with_spinner "Running package sync" \
-    $cli_bin update || {
+
+  run_with_spinner "Running package sync" "${cli_cmd[@]}" update || {
     if [[ "$bundled_count" -ge 15 ]]; then
       warn "helios update had issues, but bundled packages are available"
     else
@@ -1338,7 +1334,19 @@ setup_mcp_servers() {
   # Warm up mcp-memgraph binary
   if command -v uvx &>/dev/null; then
     info "Caching mcp-memgraph server..."
-    timeout 30 uvx --from mcp-memgraph mcp-memgraph --help >> "$LOG_FILE" 2>&1 || true
+    if command -v timeout &>/dev/null; then
+      timeout 30 uvx --from mcp-memgraph mcp-memgraph --help >> "$LOG_FILE" 2>&1 || true
+    elif command -v gtimeout &>/dev/null; then
+      gtimeout 30 uvx --from mcp-memgraph mcp-memgraph --help >> "$LOG_FILE" 2>&1 || true
+    else
+      # macOS without coreutils: run with background kill
+      uvx --from mcp-memgraph mcp-memgraph --help >> "$LOG_FILE" 2>&1 &
+      local _uvx_pid=$!
+      ( sleep 30 && kill "$_uvx_pid" 2>/dev/null ) &
+      local _kill_pid=$!
+      wait "$_uvx_pid" 2>/dev/null || true
+      kill "$_kill_pid" 2>/dev/null || true
+    fi
     success "mcp-memgraph (Bolt → MCP bridge)"
   fi
 
@@ -2188,7 +2196,12 @@ WSLSTART
 
   elif [[ "$(uname -s)" == "Linux" ]]; then
     # Docker restart policy (already in compose, but ensure)
-    docker update --restart=unless-stopped memgraph 2>/dev/null && success "Memgraph restart policy" || true
+    local mg_boot_name
+    mg_boot_name=$(resolve_memgraph_container) || mg_boot_name="memgraph"
+    if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qE "^${mg_boot_name}$"; then
+      docker update --restart=unless-stopped "$mg_boot_name" >> "${LOG_FILE:-/dev/null}" 2>&1 \
+        && success "Memgraph restart policy" || true
+    fi
 
     # Ollama systemd
     if command -v systemctl &>/dev/null; then
