@@ -32,7 +32,8 @@ RESET="${RESET:-}"
 # 1. STEP TRACKING
 # =============================================================================
 
-TOTAL_STEPS=14
+# TOTAL_STEPS should be set by the calling script before run_step calls
+TOTAL_STEPS=${TOTAL_STEPS:-0}
 CURRENT_STEP=0
 
 # step_start <step_name>
@@ -80,6 +81,8 @@ retry_with_backoff() {
   local backoff_delays="2 5 10 20"
   local attempt=0
   local exit_code=0
+  local delay=20
+  local i=0
 
   while true; do
     "$@" ; exit_code=$?
@@ -93,8 +96,10 @@ retry_with_backoff() {
     fi
 
     # Pick delay: use the nth value if available, else last value (20)
-    local delay=20
-    local i=0
+    delay=20
+    i=0
+    # Intentional unquoted: space-delimited string iterated as words (Bash 3.2 compat)
+    # shellcheck disable=SC2086
     for d in $backoff_delays; do
       if [ "$i" -eq "$(( attempt - 1 ))" ]; then
         delay="$d"

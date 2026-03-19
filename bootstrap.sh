@@ -89,7 +89,7 @@ if [[ "$PLATFORM" == "Darwin" ]]; then
     # Method 1: Non-interactive install via softwareupdate (preferred — no GUI popup)
     # Create the trigger file that makes softwareupdate list CLT
     touch /tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress 2>/dev/null || true
-    CLT_PACKAGE=$(softwareupdate -l 2>/dev/null | grep -o ".*Command Line Tools.*" | grep -v "^\\*" | sed 's/^[[:space:]]*//' | sort -V | tail -1)
+    CLT_PACKAGE=$(softwareupdate -l 2>/dev/null | grep -o ".*Command Line Tools.*" | grep -v "^\\*" | sed 's/^[[:space:]]*//' | { command -v gsort &>/dev/null && gsort -V || sort; } | tail -1)
 
     if [[ -n "$CLT_PACKAGE" ]]; then
       echo "     Found: $CLT_PACKAGE"

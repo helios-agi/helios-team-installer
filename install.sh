@@ -11,25 +11,25 @@ set -euo pipefail
 INSTALL_WARNINGS=()
 
 # ─── Source error recovery library ────────────────────────────────────────────
-INSTALLER_DIR_EARLY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -f "$INSTALLER_DIR_EARLY/lib/error-recovery.sh" ]]; then
+INSTALLER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$INSTALLER_DIR/lib/error-recovery.sh" ]]; then
   # shellcheck source=lib/error-recovery.sh
-  source "$INSTALLER_DIR_EARLY/lib/error-recovery.sh"
+  source "$INSTALLER_DIR/lib/error-recovery.sh"
 fi
 
 # ─── Source platform detection library ────────────────────────────────────────
-if [[ -f "$INSTALLER_DIR_EARLY/lib/platform.sh" ]]; then
-  source "$INSTALLER_DIR_EARLY/lib/platform.sh"
+if [[ -f "$INSTALLER_DIR/lib/platform.sh" ]]; then
+  source "$INSTALLER_DIR/lib/platform.sh"
 fi
 
 # ─── Source preserve-files library ────────────────────────────────────────────
-if [[ -f "$INSTALLER_DIR_EARLY/lib/preserve-files.sh" ]]; then
-  source "$INSTALLER_DIR_EARLY/lib/preserve-files.sh"
+if [[ -f "$INSTALLER_DIR/lib/preserve-files.sh" ]]; then
+  source "$INSTALLER_DIR/lib/preserve-files.sh"
 fi
 
 # ─── Source containers library ────────────────────────────────────────────────
-if [[ -f "$INSTALLER_DIR_EARLY/lib/containers.sh" ]]; then
-  source "$INSTALLER_DIR_EARLY/lib/containers.sh"
+if [[ -f "$INSTALLER_DIR/lib/containers.sh" ]]; then
+  source "$INSTALLER_DIR/lib/containers.sh"
 fi
 
 # ─── Early arg check (before tty redirect) ───────────────────────────────────
@@ -133,7 +133,6 @@ step()    {
 }
 ask()     { echo -en "${MAGENTA}  ? ${RESET}$* "; }
 
-INSTALLER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELIOS_RELEASE_URL="https://github.com/sweetcheeks72/helios-team-installer/releases/latest/download"
 HELIOS_AGENT_TARBALL="helios-agent-latest.tar.gz"
 FAMILIAR_REPO="github.com/sweetcheeks72/familiar"
@@ -442,7 +441,7 @@ check_prerequisites() {
 
 # ─── Pi Installation ──────────────────────────────────────────────────────────
 install_pi() {
-  step "Helios CLI"
+  step "Pi CLI (npm package)"
 
   if command -v pi &>/dev/null; then
     local pi_ver
@@ -705,7 +704,7 @@ setup_helios_agent() {
 
 # ─── Helios CLI Command ──────────────────────────────────────────────────────
 install_helios_cli() {
-  step "Helios CLI"
+  step "Helios CLI (symlink)"
 
   local helios_bin="$PI_AGENT_DIR/bin/helios"
   if [[ ! -f "$helios_bin" ]]; then
@@ -735,14 +734,24 @@ install_helios_cli() {
   fi
 
   # Add to PATH in shell profile if not already there
-  local shell_rc="$HOME/.zshrc"
-  [[ -f "$HOME/.bashrc" ]] && [[ ! -f "$HOME/.zshrc" ]] && shell_rc="$HOME/.bashrc"
+  local shell_rc
+  if [[ -n "${ZSH_VERSION:-}" ]] || [[ "$SHELL" == */zsh ]]; then
+    shell_rc="$HOME/.zshrc"
+  elif [[ -n "${BASH_VERSION:-}" ]] || [[ "$SHELL" == */bash ]]; then
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      shell_rc="$HOME/.bash_profile"
+    else
+      shell_rc="$HOME/.bashrc"
+    fi
+  else
+    shell_rc="$HOME/.zshrc"
+  fi
   if ! grep -q '\.local/bin' "$shell_rc" 2>/dev/null; then
     echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$shell_rc"
     success "Added ~/.local/bin to PATH in $(basename "$shell_rc")"
   fi
   export PATH="$HOME/.local/bin:$PATH"
-  info "Restart your terminal or run: source ~/.zshrc"
+  info "Restart your terminal or run: source $(basename "$shell_rc")"
 
 
   # Also symlink fd if present and not already in PATH
@@ -1414,7 +1423,8 @@ if os.path.exists(target):
             existing = json.load(f)
         existing.setdefault('mcpServers', {}).update(servers)
         mcp = existing
-    except: pass
+    except (json.JSONDecodeError, OSError):
+        pass  # corrupted or missing file — start fresh
 with open(target, 'w') as f:
     json.dump(mcp, f, indent=2)
     f.write('\n')
@@ -1518,7 +1528,11 @@ wire_env_to_shell() {
   if [[ -n "${ZSH_VERSION:-}" ]] || [[ "$SHELL" == */zsh ]]; then
     shell_profile="$HOME/.zshrc"
   elif [[ -n "${BASH_VERSION:-}" ]] || [[ "$SHELL" == */bash ]]; then
-    shell_profile="$HOME/.bashrc"
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      shell_profile="$HOME/.bash_profile"
+    else
+      shell_profile="$HOME/.bashrc"
+    fi
   else
     shell_profile="$HOME/.profile"
   fi
@@ -1994,21 +2008,6 @@ print('queued: ' + target)
   fi
 }
 
-# ─── Deduplicate Extensions ───────────────────────────────────────────────────
-deduplicate_extensions() {
-  step "Deduplicating Extensions"
-  local dominated_exts=("pi-review-loop")
-  for ext in "${dominated_exts[@]}"; do
-    local local_ext="$PI_AGENT_DIR/extensions/$ext"
-    local git_ext="$PI_AGENT_DIR/git/github.com/sweetcheeks72/$ext"
-    if [[ -d "$local_ext" ]] && [[ -d "$git_ext" ]]; then
-      info "Removing duplicate: $local_ext (git package $git_ext takes precedence)"
-      rm -rf "$local_ext"
-      success "Removed duplicate local extension: $ext (git package takes precedence)"
-    fi
-  done
-}
-
 # ─── Optional System Dependencies ─────────────────────────────────────────────
 install_optional_deps() {
   step "Optional Dependencies"
@@ -2022,6 +2021,10 @@ install_optional_deps() {
       brew install ffmpeg >> "$LOG_FILE" 2>&1 && success "ffmpeg installed" || warn "ffmpeg: install manually — brew install ffmpeg"
     elif command -v apt-get &>/dev/null; then
       sudo apt-get install -y ffmpeg >> "$LOG_FILE" 2>&1 && success "ffmpeg installed" || warn "ffmpeg: install manually"
+    elif command -v dnf &>/dev/null; then
+      sudo dnf install -y ffmpeg >> "$LOG_FILE" 2>&1 && success "ffmpeg installed" || warn "ffmpeg: install manually — sudo dnf install ffmpeg"
+    elif command -v pacman &>/dev/null; then
+      sudo pacman -S --noconfirm ffmpeg >> "$LOG_FILE" 2>&1 && success "ffmpeg installed" || warn "ffmpeg: install manually — sudo pacman -S ffmpeg"
     else
       warn "ffmpeg not found — install manually for video features"
     fi
@@ -2034,6 +2037,17 @@ install_optional_deps() {
     info "Installing yt-dlp (YouTube video/transcript)..."
     if [[ "$(uname -s)" == "Darwin" ]] && command -v brew &>/dev/null; then
       brew install yt-dlp >> "$LOG_FILE" 2>&1 && success "yt-dlp installed" || true
+    elif command -v apt-get &>/dev/null; then
+      sudo apt-get install -y yt-dlp >> "$LOG_FILE" 2>&1 && success "yt-dlp installed" || \
+        { command -v pip3 &>/dev/null && pip3 install --user yt-dlp >> "$LOG_FILE" 2>&1 && success "yt-dlp installed (pip3)"; } || \
+        warn "yt-dlp: install manually — pip3 install --user yt-dlp"
+    elif command -v dnf &>/dev/null; then
+      sudo dnf install -y yt-dlp >> "$LOG_FILE" 2>&1 && success "yt-dlp installed" || \
+        { command -v pip3 &>/dev/null && pip3 install --user yt-dlp >> "$LOG_FILE" 2>&1 && success "yt-dlp installed (pip3)"; } || \
+        warn "yt-dlp: install manually — pip3 install --user yt-dlp"
+    elif command -v pacman &>/dev/null; then
+      sudo pacman -S --noconfirm yt-dlp >> "$LOG_FILE" 2>&1 && success "yt-dlp installed" || \
+        warn "yt-dlp: install manually — sudo pacman -S yt-dlp"
     elif command -v pipx &>/dev/null; then
       pipx install yt-dlp >> "$LOG_FILE" 2>&1 && success "yt-dlp installed" || warn "yt-dlp: install manually"
     elif command -v pip3 &>/dev/null; then
@@ -2218,26 +2232,6 @@ WSLSTART
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 main() {
-  for arg in "$@"; do
-    case "$arg" in
-      --help|-h)
-        echo "Usage: bash install.sh [options]"
-        echo ""
-        echo "Options:"
-        echo "  --fresh    Force full interactive setup (re-prompt provider, keys)"
-        echo "  --update   Run in update mode (skip interactive prompts)"
-        echo "  --help     Show this help message"
-        echo ""
-        echo "First install (team members):"
-        echo "  curl -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh | bash"
-        echo ""
-        echo "Re-run / update:"
-        echo "  helios update"
-        exit 0
-        ;;
-    esac
-  done
-
   print_banner
   echo -e "  ${BOLD}Starting Helios installation...${RESET}"
   echo -e "  ${DIM}This will install Helios CLI, Helios agent, and supporting tools.${RESET}"
@@ -2245,9 +2239,13 @@ main() {
   echo ""
   detect_update_mode "$@"
 
-  # Adjust step counter for update mode (only 3 of 14 steps run)
+  # Set TOTAL_STEPS accurately for this run (error-recovery.sh defaults to 0)
+  # Full install: 13 run_step calls. Update mode: 3 run_step calls.
   if [[ "$UPDATE_MODE" == true ]]; then
     TOTAL_STEPS=3
+    CURRENT_STEP=0
+  else
+    TOTAL_STEPS=13
     CURRENT_STEP=0
   fi
 
@@ -2277,9 +2275,9 @@ main() {
 
   if [[ "$UPDATE_MODE" == false ]]; then
     run_step "Prerequisites"     check_prerequisites
-    run_step "Helios CLI"            install_pi
-    run_step "Helios Agent"      setup_helios_agent || { error "Helios Agent setup failed"; exit 1; }
-    run_step "Helios CLI"        install_helios_cli
+    run_step "Pi CLI (npm package)"  install_pi
+    run_step "Helios Agent"          setup_helios_agent || { error "Helios Agent setup failed"; exit 1; }
+    run_step "Helios CLI (symlink)"  install_helios_cli
     # Interactive — must not go through run_step (captures stdout, breaks read prompts)
     select_provider
   fi
@@ -2291,7 +2289,6 @@ main() {
   fi
 
   run_step "Pi Packages"       install_packages
-  deduplicate_extensions
   run_step "Skill Dependencies" install_skill_deps
   run_step "Governance Deps"    install_governance_deps
 
@@ -2304,11 +2301,15 @@ main() {
     run_step "Optional Deps"     install_optional_deps
     setup_boot_services   # LaunchAgents (macOS) / cron (Linux)
     schedule_bootstrap    # Queue + launch codebase indexing in background
-    setup_api_keys        # Interactive: prompt for keys
-    wire_env_to_shell     # Add .env sourcing to shell profile
+
+    # Interactive — bypasses run_step to avoid stdout capture
+    setup_api_keys
+    wire_env_to_shell
+
     setup_familiar        # Interactive: optional Familiar install
   fi
 
+  # Non-interactive but light-weight — checkpoint not critical
   dedup_skills_extensions
   run_verification
   print_quickstart
