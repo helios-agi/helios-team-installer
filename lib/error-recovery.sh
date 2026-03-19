@@ -465,6 +465,22 @@ run_step() {
     return 0
   fi
 
+  # ── Background heartbeat — prints a dot every 10 s so the terminal
+  #    doesn't look frozen during long-running steps (npm, curl, etc.)  ──
+  local _hb_pid=""
+  _hb_loop() { while true; do sleep 10; printf '.'; done; }
+  _hb_loop &
+  _hb_pid=$!
+  # Helper: stop heartbeat and move to a fresh line
+  _kill_hb() {
+    if [[ -n "$_hb_pid" ]]; then
+      kill "$_hb_pid" 2>/dev/null
+      wait "$_hb_pid" 2>/dev/null || true
+      printf '\n'
+      _hb_pid=""
+    fi
+  }
+
   # ── Capture output to temp file ────────────────────────────────────
   local tmp_output
   tmp_output="$(mktemp /tmp/helios-step-XXXXXX 2>/dev/null || echo "/tmp/helios-step-$$")"
@@ -474,6 +490,7 @@ run_step() {
   export _INSIDE_RUN_STEP=true
   if "${cmd[@]}" >"$tmp_output" 2>&1; then
     _INSIDE_RUN_STEP=false
+    _kill_hb
     step_done
     save_checkpoint
     rm -f "$tmp_output"
@@ -481,6 +498,7 @@ run_step() {
   else
     exit_code=$?
     _INSIDE_RUN_STEP=false
+    _kill_hb
     local captured_output
     captured_output="$(cat "$tmp_output" 2>/dev/null)"
     rm -f "$tmp_output"
@@ -493,13 +511,18 @@ run_step() {
       local retry_output
       retry_output="$(mktemp /tmp/helios-step-retry-XXXXXX 2>/dev/null || echo "/tmp/helios-step-retry-$$")"
       echo -e "  ${CYAN}Retrying step: ${step_name}...${RESET}"
+      # Restart heartbeat for the retry
+      _hb_loop &
+      _hb_pid=$!
       if "${cmd[@]}" >"$retry_output" 2>&1; then
+        _kill_hb
         step_done
         save_checkpoint
         rm -f "$retry_output"
         return 0
       else
         exit_code=$?
+        _kill_hb
         local retry_out
         retry_out="$(cat "$retry_output" 2>/dev/null)"
         rm -f "$retry_output"
