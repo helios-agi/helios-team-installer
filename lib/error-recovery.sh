@@ -358,6 +358,8 @@ offer_troubleshoot() {
     case "${answer:-Y}" in
       [Yy]* | "")
         echo -e "  ${CYAN}Applying fix...${RESET}"
+        # SAFE: $fix is only from static _KNOWN_FIX_CMDS — no user input
+        # shellcheck disable=SC2091
         if eval "$fix"; then
           echo -e "  ${GREEN}Fix applied successfully.${RESET}"
           return 0

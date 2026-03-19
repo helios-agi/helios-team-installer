@@ -89,7 +89,7 @@ trap cleanup EXIT INT TERM
 # These fallback definitions are only used if the lib failed to load.
 if ! declare -f is_wsl &>/dev/null; then
   is_wsl() {
-    [[ -f /proc/version ]] && grep -qi "microsoft\|wsl" /proc/version 2>/dev/null
+    [[ -f /proc/version ]] && grep -qiE "microsoft|wsl" /proc/version 2>/dev/null
   }
 
   current_platform() {
@@ -132,6 +132,7 @@ step()    {
   echo -e "\n${BOLD}${CYAN}▶ $*${RESET}"
 }
 ask()     { echo -en "${MAGENTA}  ? ${RESET}$* "; }
+_count()  { wc -l | tr -d ' '; }
 
 HELIOS_RELEASE_URL="https://github.com/sweetcheeks72/helios-team-installer/releases/latest/download"
 HELIOS_AGENT_TARBALL="helios-agent-latest.tar.gz"
@@ -258,8 +259,6 @@ check_prerequisites() {
 
   local platform
   platform="$(current_platform)"
-  local arch
-  arch="$(uname -m)"
 
   # ── Homebrew (macOS only) ──────────────────────────────────────────────────
   if [[ "$platform" == "macos" ]] && ! command -v brew &>/dev/null; then
@@ -655,7 +654,7 @@ setup_helios_agent() {
 
   # Check disk space before downloading
   local free_mb
-  free_mb=$(df -m "$HOME" 2>/dev/null | awk 'NR==2 {print $4}')
+  free_mb=$(df -Pm "$HOME" 2>/dev/null | awk 'NR>1 {print $4; exit}')
   if [[ -n "$free_mb" ]] && [[ "$free_mb" -lt 500 ]]; then
     error "Insufficient disk space (${free_mb}MB free, need at least 500MB)"
     return 1
@@ -713,23 +712,23 @@ install_helios_cli() {
   fi
 
   chmod +x "$helios_bin"
-  local installed=false
+  local system_install=false
 
   # Try /usr/local/bin first
   if [[ -w /usr/local/bin ]]; then
     ln -sfn "$helios_bin" /usr/local/bin/helios
     success "helios → /usr/local/bin/helios"
-    installed=true
+    system_install=true
   elif sudo -n true 2>/dev/null; then
     sudo ln -sfn "$helios_bin" /usr/local/bin/helios
     success "helios → /usr/local/bin/helios"
-    installed=true
+    system_install=true
   fi
 
   # Also install to ~/.local/bin
   mkdir -p "$HOME/.local/bin"
   ln -sfn "$helios_bin" "$HOME/.local/bin/helios"
-  if [[ "$installed" == false ]]; then
+  if [[ "$system_install" == false ]]; then
     success "helios → ~/.local/bin/helios"
   fi
 
@@ -777,7 +776,7 @@ install_packages() {
   # Check if packages were bundled in the tarball
   local bundled_count=0
   if [[ -d "$PI_AGENT_DIR/git/github.com/sweetcheeks72" ]]; then
-    bundled_count=$(find "$PI_AGENT_DIR/git/github.com/sweetcheeks72" -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+    bundled_count=$(find "$PI_AGENT_DIR/git/github.com/sweetcheeks72" -maxdepth 1 -type d 2>/dev/null | _count)
     ((bundled_count--)) || true  # subtract the parent dir itself
   fi
 
@@ -1285,7 +1284,8 @@ setup_ollama() {
   # Ensure Ollama is running
   if ! curl -sf http://localhost:11434/api/tags &>/dev/null; then
     info "Starting Ollama..."
-    if pgrep -x ollama &>/dev/null || launchctl list 2>/dev/null | grep -q com.ollama; then
+    if pgrep -x ollama &>/dev/null \
+       || { [[ "$(uname -s)" == "Darwin" ]] && launchctl list 2>/dev/null | grep -q com.ollama; }; then
       success "Ollama already running (managed by system)"
     else
       nohup ollama serve >> "$LOG_FILE" 2>&1 &
@@ -1721,7 +1721,7 @@ run_verification() {
   # Count agents
   local agent_count=0
   if [[ -d "$PI_AGENT_DIR/agents" ]]; then
-    agent_count=$(find "$PI_AGENT_DIR/agents" -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
+    agent_count=$(find "$PI_AGENT_DIR/agents" -name "*.md" 2>/dev/null | _count)
     if [[ "$agent_count" -ge 48 ]]; then
       success "Agents: $agent_count (expect 48+)"
     else
@@ -1734,7 +1734,7 @@ run_verification() {
   skill_count=$(
     (find "$PI_AGENT_DIR/skills" -name "SKILL.md" 2>/dev/null
      find "$FAMILIAR_DIR/skills" -name "SKILL.md" 2>/dev/null
-     true) | wc -l | tr -d ' '
+     true) | _count
   )
   if [[ "$skill_count" -ge 16 ]]; then
     success "Skills: $skill_count (expect 16+)"
@@ -1745,7 +1745,7 @@ run_verification() {
   # Count extensions
   local ext_count=0
   if [[ -d "$PI_AGENT_DIR/extensions" ]]; then
-    ext_count=$(find "$PI_AGENT_DIR/extensions" -name "*.js" -o -name "index.ts" 2>/dev/null | wc -l | tr -d ' ')
+    ext_count=$(find "$PI_AGENT_DIR/extensions" -name "*.js" -o -name "index.ts" 2>/dev/null | _count)
     success "Extensions: found in ~/.pi/agent/extensions/"
   fi
 
@@ -1753,7 +1753,7 @@ run_verification() {
   local env_file="$PI_AGENT_DIR/.env"
   if [[ -f "$env_file" ]]; then
     local keys_set
-    keys_set=$(grep -v '^#' "$env_file" 2>/dev/null | grep -v '^$' | grep -v '=$' | wc -l | tr -d ' ') || keys_set=0
+    keys_set=$(grep -v '^#' "$env_file" 2>/dev/null | grep -v '^$' | grep -v '=$' | _count) || keys_set=0
     if [[ "$keys_set" -gt 0 ]]; then
       success ".env: $keys_set key(s) configured"
     else
@@ -1962,7 +1962,8 @@ if os.path.exists(sf):
     try:
         with open(sf) as f:
             existing = json.load(f)
-    except: pass
+    except (json.JSONDecodeError, OSError):
+        pass  # corrupted or missing — start fresh
 record = {
     'state': 'queued',
     'targetPath': target,
@@ -2275,7 +2276,7 @@ main() {
 
   if [[ "$UPDATE_MODE" == false ]]; then
     run_step "Prerequisites"     check_prerequisites
-    run_step "Pi CLI (npm package)"  install_pi
+    run_step "Pi CLI (npm)"  install_pi
     run_step "Helios Agent"          setup_helios_agent || { error "Helios Agent setup failed"; exit 1; }
     run_step "Helios CLI (symlink)"  install_helios_cli
     # Interactive — must not go through run_step (captures stdout, breaks read prompts)

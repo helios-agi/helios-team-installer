@@ -4,7 +4,7 @@
 # =============================================================================
 # Usage: curl -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh | bash
 # =============================================================================
-{
+
 # ─── Windows Detection ────────────────────────────────────────────────────────
 case "$(uname -s 2>/dev/null)" in
   MINGW*|MSYS*|CYGWIN*)
@@ -45,7 +45,6 @@ else
 fi
 
 PLATFORM="$(uname -s)"
-ARCH="$(uname -m)"
 INSTALLER_DIR="$HOME/helios-team-installer"
 INSTALLER_REPO="https://github.com/sweetcheeks72/helios-team-installer.git"
 
@@ -248,7 +247,7 @@ echo ""
 # ─── Clone or update installer ───────────────────────────────────────────────
 if [ -d "$INSTALLER_DIR/.git" ]; then
   echo -e "  ${CYAN}ℹ${RESET} Installer already exists — pulling latest..."
-  if ! git -C "$INSTALLER_DIR" pull --rebase --autostash -q 2>/dev/null; then
+  if ! git -C "$INSTALLER_DIR" pull --rebase -q 2>/dev/null; then
     echo -e "  ${YELLOW}⚠${RESET} Could not pull latest — using existing version"
   fi
 else
@@ -283,4 +282,3 @@ INSTALLER_COMMIT="$(git -C "$INSTALLER_DIR" rev-parse --short HEAD 2>/dev/null |
 echo -e "  ${DIM}Running install.sh from commit ${INSTALLER_COMMIT}${RESET}"
 
 exec bash "$INSTALLER_DIR/install.sh" "$@"
-}
