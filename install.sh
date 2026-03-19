@@ -269,7 +269,7 @@ check_prerequisites() {
       info "To fix: System Settings → Users & Groups → make '$(whoami)' an Admin, then re-run"
     else
       info "Installing Homebrew (required for macOS package management)..."
-      /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" </dev/null >> "$LOG_FILE" 2>&1
+      /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" >> "$LOG_FILE" 2>&1
       # Add brew to PATH for this session
       if [[ -x /opt/homebrew/bin/brew ]]; then
         eval "$(/opt/homebrew/bin/brew shellenv)" 2>/dev/null || true

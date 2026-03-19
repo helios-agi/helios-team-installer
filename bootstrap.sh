@@ -167,7 +167,7 @@ if [[ "$PLATFORM" == "Darwin" ]] && ! command -v brew &>/dev/null; then
     BREW_INSTALLER="/tmp/homebrew-install.sh"
     curl -fsSL "$HOMEBREW_INSTALL_URL" -o "$BREW_INSTALLER"
     echo -e "  ${DIM}Homebrew installer downloaded — pinned to known-good commit aec7285${RESET}"
-    /bin/bash "$BREW_INSTALLER" </dev/null
+    /bin/bash "$BREW_INSTALLER"
     rm -f "$BREW_INSTALLER"
     # Add brew to PATH for this session
     if [[ -x /opt/homebrew/bin/brew ]]; then
