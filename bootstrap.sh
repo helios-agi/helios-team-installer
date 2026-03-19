@@ -20,7 +20,7 @@ esac
 
 # ─── Strict mode — but with error trap so failures are VISIBLE ────────────────
 set -euo pipefail
-trap 'echo ""; echo "✗ Bootstrap failed at line $LINENO. Re-run to retry (safe — idempotent)."; echo "  If stuck, run manually: bash ~/helios-team-installer/install.sh"' ERR
+trap 'echo ""; echo "✗ Bootstrap failed at line $LINENO. Re-run to retry (safe — idempotent)."; echo "  If stuck, run manually: bash ~/helios-team-installer/install.sh"; echo "  Logs: /tmp/helios-bootstrap.log"' ERR
 
 # ─── Restore stdin from terminal (critical for curl|bash piping) ─────────────
 if [[ ! -t 0 ]]; then
@@ -77,6 +77,23 @@ echo -e "${RESET}"
 echo -e "  ${DIM}Setting up prerequisites — this may take 1-2 minutes...${RESET}"
 echo ""
 
+# ─── FIX #6: Network connectivity check ──────────────────────────────────────
+if ! curl -fsSL --connect-timeout 5 --max-time 10 https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh -o /dev/null 2>/dev/null; then
+  echo -e "  ${RED}✗${RESET} Cannot reach GitHub. Check your internet connection or VPN."
+  echo -e "  ${DIM}If behind a firewall, ensure raw.githubusercontent.com is accessible.${RESET}"
+  exit 1
+fi
+
+# ─── FIX #4: Rosetta 2 detection (Apple Silicon) ─────────────────────────────
+if [[ "$PLATFORM" == "Darwin" ]] && [[ "$(uname -m)" == "x86_64" ]]; then
+  if sysctl -n sysctl.proc_translated 2>/dev/null | grep -q 1; then
+    echo -e "  ${RED}✗${RESET} Terminal is running under Rosetta 2 (Intel emulation)."
+    echo -e "  ${DIM}Homebrew requires native ARM mode on Apple Silicon Macs.${RESET}"
+    echo -e "  ${DIM}Fix: Right-click Terminal → Get Info → uncheck 'Open using Rosetta', then re-run.${RESET}"
+    exit 1
+  fi
+fi
+
 # ─── macOS: Xcode Command Line Tools (MUST come before git or brew) ──────────
 # On fresh Macs, /usr/bin/git is a shim that triggers a GUI install dialog for
 # Xcode CLT. This dialog appears BEHIND other windows and hangs the installer.
@@ -95,7 +112,10 @@ if [[ "$PLATFORM" == "Darwin" ]]; then
     if [[ -n "$CLT_PACKAGE" ]]; then
       echo "     Found: $CLT_PACKAGE"
       echo "     Installing (this is the slow part)..."
-      if sudo softwareupdate -i "$CLT_PACKAGE" --verbose 2>&1 | while IFS= read -r line; do
+      # FIX #3: softwareupdate -i requires sudo — check admin first, cache credentials
+      if groups 2>/dev/null | grep -qw admin || sudo -n true 2>/dev/null; then
+        sudo -v 2>/dev/null || true  # Cache sudo credentials
+        if sudo softwareupdate -i "$CLT_PACKAGE" --verbose 2>&1 | while IFS= read -r line; do
         # Show progress dots so user knows it's working
         printf "." >&2
       done; then
@@ -104,6 +124,10 @@ if [[ "$PLATFORM" == "Darwin" ]]; then
       else
         echo ""
         echo "  ⚠  softwareupdate install failed — trying xcode-select..."
+      fi
+      else
+        echo ""
+        echo "  ⚠  Admin privileges required for softwareupdate — trying xcode-select fallback..."
       fi
     fi
     rm -f /tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress 2>/dev/null || true
@@ -167,7 +191,11 @@ if [[ "$PLATFORM" == "Darwin" ]] && ! command -v brew &>/dev/null; then
     BREW_INSTALLER="/tmp/homebrew-install.sh"
     curl -fsSL "$HOMEBREW_INSTALL_URL" -o "$BREW_INSTALLER"
     echo -e "  ${DIM}Homebrew installer downloaded — pinned to known-good commit aec7285${RESET}"
-    /bin/bash "$BREW_INSTALLER"
+    # FIX #1: Cache sudo credentials before Homebrew install so password prompt works
+    echo -e "  ${DIM}Homebrew needs admin access — you may be prompted for your password.${RESET}"
+    sudo -v 2>/dev/null || true
+    # FIX #2: Set NONINTERACTIVE=1 to skip Homebrew's "Press RETURN" prompt
+    NONINTERACTIVE=1 /bin/bash "$BREW_INSTALLER"
     rm -f "$BREW_INSTALLER"
     # Add brew to PATH for this session
     if [[ -x /opt/homebrew/bin/brew ]]; then
@@ -176,6 +204,22 @@ if [[ "$PLATFORM" == "Darwin" ]] && ! command -v brew &>/dev/null; then
       eval "$(/usr/local/bin/brew shellenv)" 2>/dev/null || true
     fi
     command -v brew &>/dev/null && echo -e "  ${GREEN}✓${RESET} Homebrew installed" || { echo -e "  ${RED}✗${RESET} Homebrew install failed"; exit 1; }
+    # FIX #5: Persist Homebrew PATH to shell profile so it survives new terminals
+    local brew_shellenv=""
+    if [[ -x /opt/homebrew/bin/brew ]]; then
+      brew_shellenv='eval "$(/opt/homebrew/bin/brew shellenv)"'
+    elif [[ -x /usr/local/bin/brew ]]; then
+      brew_shellenv='eval "$(/usr/local/bin/brew shellenv)"'
+    fi
+    if [[ -n "$brew_shellenv" ]]; then
+      for rc in "$HOME/.zprofile" "$HOME/.bash_profile"; do
+        if [[ -f "$rc" ]] || [[ "$rc" == *"zprofile"* ]]; then
+          if ! grep -qF 'brew shellenv' "$rc" 2>/dev/null; then
+            echo "$brew_shellenv" >> "$rc"
+          fi
+        fi
+      done
+    fi
   fi
 fi
 
@@ -265,7 +309,12 @@ if command -v python3 &>/dev/null; then
 else
   echo -e "  ${CYAN}⬇${RESET}  Installing python3..."
   if [[ "$PLATFORM" == "Darwin" ]]; then
-    brew install python3 2>&1
+    # FIX #7: Check brew exists before calling it
+    if command -v brew &>/dev/null; then
+      brew install python3 2>&1
+    else
+      echo -e "  ${YELLOW}⚠${RESET} No Homebrew — python3 unavailable (non-critical)"
+    fi
   elif command -v apt-get &>/dev/null; then
     sudo apt-get install -y python3
   elif command -v dnf &>/dev/null; then
@@ -301,7 +350,12 @@ else
     mv "$INSTALLER_DIR" "${INSTALLER_DIR}.backup.$(date +%Y%m%d_%H%M%S)"
   fi
   echo -e "  ${CYAN}⬇${RESET}  Downloading installer..."
-  git clone -q "$INSTALLER_REPO" "$INSTALLER_DIR"
+  # FIX #8: Add timeout to git clone to prevent hanging on bad network
+  timeout 60 git clone -q "$INSTALLER_REPO" "$INSTALLER_DIR" || {
+    echo -e "  ${RED}✗${RESET} Git clone timed out or failed. Check your internet connection."
+    echo -e "  ${DIM}Alternative: git clone $INSTALLER_REPO ~/helios-team-installer && bash ~/helios-team-installer/install.sh${RESET}"
+    exit 1
+  }
 fi
 
 # Sanity check: verify working tree is clean after pull
@@ -334,5 +388,7 @@ INSTALLER_COMMIT="$(git -C "$INSTALLER_DIR" rev-parse --short HEAD 2>/dev/null |
 echo -e "  ${DIM}Running install.sh from commit ${INSTALLER_COMMIT}${RESET}"
 
 exec bash "$INSTALLER_DIR/install.sh" "$@"
-"$INSTALLER_DIR/install.sh" "$@"
+# FIX #10: exec replaces the process — this line is the fallback if exec itself fails
+echo -e "  ${RED}✗${RESET} exec failed. Running directly instead..."
+bash "$INSTALLER_DIR/install.sh" "$@"
 }
