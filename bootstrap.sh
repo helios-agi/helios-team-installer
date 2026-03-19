@@ -140,10 +140,10 @@ echo -e "  ${BOLD}Installing prerequisites...${RESET}"
 # Homebrew (macOS only)
 if [[ "$PLATFORM" == "Darwin" ]] && ! command -v brew &>/dev/null; then
   echo -e "  ${CYAN}⬇${RESET}  Installing Homebrew..."
-  HOMEBREW_INSTALL_URL="https://raw.githubusercontent.com/Homebrew/install/aec7285/install.sh"
+  HOMEBREW_INSTALL_URL="https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
   BREW_INSTALLER="/tmp/homebrew-install.sh"
   curl -fsSL "$HOMEBREW_INSTALL_URL" -o "$BREW_INSTALLER"
-  echo -e "  ${DIM}Homebrew installer downloaded — pinned to known-good commit aec7285${RESET}"
+  echo -e "  ${DIM}Downloading Homebrew installer...${RESET}"
   /bin/bash "$BREW_INSTALLER" </dev/null
   rm -f "$BREW_INSTALLER"
   # Add brew to PATH for this session
