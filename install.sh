@@ -262,19 +262,26 @@ check_prerequisites() {
 
   # ── Homebrew (macOS only) ──────────────────────────────────────────────────
   if [[ "$platform" == "macos" ]] && ! command -v brew &>/dev/null; then
-    info "Installing Homebrew (required for macOS package management)..."
-    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" </dev/null >> "$LOG_FILE" 2>&1
-    # Add brew to PATH for this session
-    if [[ -x /opt/homebrew/bin/brew ]]; then
-      eval "$(/opt/homebrew/bin/brew shellenv)" 2>/dev/null || true
-    elif [[ -x /usr/local/bin/brew ]]; then
-      eval "$(/usr/local/bin/brew shellenv)" 2>/dev/null || true
-    fi
-    if command -v brew &>/dev/null; then
-      success "Homebrew installed"
+    # Check admin access before attempting Homebrew install
+    if ! groups 2>/dev/null | grep -qw admin && ! sudo -n true 2>/dev/null; then
+      warn "Homebrew requires admin privileges, but user '$(whoami)' is not an Administrator"
+      info "Skipping Homebrew — will try direct installs instead"
+      info "To fix: System Settings → Users & Groups → make '$(whoami)' an Admin, then re-run"
     else
-      error "Homebrew install failed — install manually: https://brew.sh"
-      exit 1
+      info "Installing Homebrew (required for macOS package management)..."
+      /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" </dev/null >> "$LOG_FILE" 2>&1
+      # Add brew to PATH for this session
+      if [[ -x /opt/homebrew/bin/brew ]]; then
+        eval "$(/opt/homebrew/bin/brew shellenv)" 2>/dev/null || true
+      elif [[ -x /usr/local/bin/brew ]]; then
+        eval "$(/usr/local/bin/brew shellenv)" 2>/dev/null || true
+      fi
+      if command -v brew &>/dev/null; then
+        success "Homebrew installed"
+      else
+        warn "Homebrew install failed — will try direct installs instead"
+        info "Install Homebrew manually later: https://brew.sh"
+      fi
     fi
   fi
 
