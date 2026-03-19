@@ -461,6 +461,27 @@ install_pi() {
     fi
   fi
   
+  # Fix npm global prefix on Linux when it points to /usr or /usr/local (requires sudo).
+  # Redirect to ~/.npm-global so installs work without elevated privileges.
+  if [[ "$(uname -s)" == "Linux" ]]; then
+    local npm_prefix
+    npm_prefix="$(npm config get prefix 2>/dev/null || echo "")"
+    if [[ "$npm_prefix" == "/usr" || "$npm_prefix" == "/usr/local" ]]; then
+      info "npm global prefix is ${npm_prefix} (requires sudo) — redirecting to ~/.npm-global..."
+      mkdir -p "$HOME/.npm-global"
+      npm config set prefix "$HOME/.npm-global" >> "$LOG_FILE" 2>&1
+      export PATH="$HOME/.npm-global/bin:$PATH"
+      # Persist PATH in user shell profile so it survives the session
+      local profile_file="$HOME/.profile"
+      [[ -f "$HOME/.bashrc" ]] && profile_file="$HOME/.bashrc"
+      [[ -f "$HOME/.zshrc" ]]  && profile_file="$HOME/.zshrc"
+      if ! grep -q 'npm-global' "$profile_file" 2>/dev/null; then
+        echo 'export PATH="$HOME/.npm-global/bin:$PATH"' >> "$profile_file"
+      fi
+      success "npm prefix redirected to ~/.npm-global"
+    fi
+  fi
+
   if run_with_spinner "Installing Helios CLI" \
       npm install -g @mariozechner/pi-coding-agent; then
     PI_INSTALLED=true
