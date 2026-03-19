@@ -59,8 +59,14 @@ step_done() {
 step_fail() {
   local error_msg="${1:-unknown error}"
   local exit_code="${2:-1}"
-  printf " ${RED}✗ FAILED${RESET}\n"
-  echo -e "  ${RED}Error:${RESET} ${error_msg}" >&2
+  printf " ${RED}✗${RESET}\n"
+  # Show last 20 lines of captured output so user can see what failed
+  if [[ -n "$error_msg" ]] && [[ "$error_msg" != "unknown error" ]]; then
+    echo -e "  ${DIM}--- step output (last 20 lines) ---${RESET}" >&2
+    echo "$error_msg" | tail -20 >&2
+    echo -e "  ${DIM}---${RESET}" >&2
+  fi
+  echo -e "  ${RED}Step failed (exit $exit_code).${RESET} Full log: \${LOG_FILE:-see above}" >&2
   generate_diagnostic_dump "${_CURRENT_STEP_NAME:-unknown}" "$exit_code"
   offer_troubleshoot "$error_msg" "${_CURRENT_STEP_NAME:-unknown}"
 }

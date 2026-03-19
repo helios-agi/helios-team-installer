@@ -260,6 +260,10 @@ check_prerequisites() {
   local platform
   platform="$(current_platform)"
 
+  # Diagnostic: show environment for debugging
+  info "Platform: $platform | bash: ${BASH_VERSION:-unknown} | user: $(whoami)"
+  info "Node: $(node -v 2>/dev/null || echo 'not found') | npm: $(npm -v 2>/dev/null || echo 'not found') | prefix: $(npm config get prefix 2>/dev/null || echo 'n/a')"
+
   # ── Homebrew (macOS only) ──────────────────────────────────────────────────
   if [[ "$platform" == "macos" ]] && ! command -v brew &>/dev/null; then
     info "Installing Homebrew (required for macOS package management)..."
