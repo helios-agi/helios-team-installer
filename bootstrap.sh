@@ -247,8 +247,17 @@ echo ""
 # ─── Clone or update installer ───────────────────────────────────────────────
 if [ -d "$INSTALLER_DIR/.git" ]; then
   echo -e "  ${CYAN}ℹ${RESET} Installer already exists — pulling latest..."
-  if ! git -C "$INSTALLER_DIR" pull --rebase -q 2>/dev/null; then
-    echo -e "  ${YELLOW}⚠${RESET} Could not pull latest — using existing version"
+  # Abort any in-progress rebase from a previous failed run
+  if [ -d "$INSTALLER_DIR/.git/rebase-merge" ] || [ -d "$INSTALLER_DIR/.git/rebase-apply" ]; then
+    git -C "$INSTALLER_DIR" rebase --abort 2>/dev/null || true
+  fi
+  if ! git -C "$INSTALLER_DIR" pull --ff-only -q 2>/dev/null; then
+    # Fast-forward failed (local diverged from upstream) — hard reset
+    echo -e "  ${YELLOW}⚠${RESET} Local installer modified — resetting to latest release..."
+    git -C "$INSTALLER_DIR" fetch origin main -q 2>/dev/null || true
+    git -C "$INSTALLER_DIR" reset --hard origin/main -q 2>/dev/null || {
+      echo -e "  ${YELLOW}⚠${RESET} Could not update — using existing version"
+    }
   fi
 else
   if [ -d "$INSTALLER_DIR" ]; then
@@ -256,6 +265,13 @@ else
     mv "$INSTALLER_DIR" "${INSTALLER_DIR}.backup.$(date +%Y%m%d_%H%M%S)"
   fi
   echo -e "  ${CYAN}⬇${RESET}  Downloading installer..."
+  git clone -q "$INSTALLER_REPO" "$INSTALLER_DIR"
+fi
+
+# Sanity check: verify working tree is clean after pull
+if [ ! -f "$INSTALLER_DIR/install.sh" ]; then
+  echo -e "  ${YELLOW}⚠${RESET} Working tree corrupt — re-cloning..."
+  rm -rf "$INSTALLER_DIR"
   git clone -q "$INSTALLER_REPO" "$INSTALLER_DIR"
 fi
 
