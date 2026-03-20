@@ -1387,6 +1387,97 @@ wire_env_to_shell() {
   fi
 }
 
+# ─── Pi Auth (OAuth browser login) ────────────────────────────────────────────
+setup_pi_auth() {
+  step "AI Provider Login"
+
+  # Check if Pi is available
+  local pi_cmd=""
+  if command -v helios &>/dev/null; then
+    pi_cmd="helios"
+  elif command -v pi &>/dev/null; then
+    pi_cmd="pi"
+  elif [[ -f "$HOME/.npm-global/bin/pi" ]]; then
+    pi_cmd="$HOME/.npm-global/bin/pi"
+  elif [[ -f "$HOME/.local/bin/helios" ]]; then
+    pi_cmd="$HOME/.local/bin/helios"
+  fi
+
+  if [[ -z "$pi_cmd" ]]; then
+    warn "Pi CLI not found — you can log in later by running 'helios'"
+    return 0
+  fi
+
+  # Check if user already has auth tokens
+  local auth_file="$PI_AGENT_DIR/auth.json"
+  if [[ -f "$auth_file" ]]; then
+    local has_tokens
+    has_tokens=$(node -e "
+      const a = require('$auth_file');
+      const providers = Object.keys(a).filter(k => a[k].type === 'oauth' || a[k].type === 'api_key');
+      console.log(providers.length);
+    " 2>/dev/null || echo "0")
+    if [[ "${has_tokens:-0}" -gt 0 ]]; then
+      success "Already logged in ($has_tokens provider(s) configured)"
+      return 0
+    fi
+  fi
+
+  echo ""
+  echo -e "  ${BOLD}Helios needs to connect to an AI provider.${RESET}"
+  echo ""
+  echo -e "  ${DIM}This will open Pi, where you can log in to your AI provider${RESET}"
+  echo -e "  ${DIM}(Anthropic, OpenAI, Google, etc.) via your browser.${RESET}"
+  echo ""
+  echo -e "  ${DIM}Inside Pi:${RESET}"
+  echo -e "    ${CYAN}1.${RESET} Type ${BOLD}/login${RESET} and press Enter"
+  echo -e "    ${CYAN}2.${RESET} Select your AI provider"
+  echo -e "    ${CYAN}3.${RESET} Log in via the browser window that opens"
+  echo -e "    ${CYAN}4.${RESET} Type ${BOLD}/exit${RESET} to return to the installer"
+  echo ""
+  # Skip if non-interactive (e.g., piped install, CI)
+  if [[ ! -t 0 ]]; then
+    info "Non-interactive mode — skipping login (run 'helios' later and type /login)"
+    return 0
+  fi
+
+  ask "Open Pi now to log in? [Y/n]:"
+  read -t 120 -r do_login || do_login=""
+  do_login="${do_login:-y}"
+
+  if [[ "$do_login" =~ ^[Yy]$ ]]; then
+    echo ""
+    info "Launching Pi — type /login to connect your AI provider, then /exit when done"
+    echo -e "  ${DIM}────────────────────────────────────────────────────${RESET}"
+    echo ""
+
+    # Launch Pi interactively — user will type /login, authenticate, then /exit
+    "$pi_cmd" || true
+
+    echo ""
+    echo -e "  ${DIM}────────────────────────────────────────────────────${RESET}"
+
+    # Check if auth was successful
+    if [[ -f "$auth_file" ]]; then
+      local post_tokens
+      post_tokens=$(node -e "
+        const a = require('$auth_file');
+        const providers = Object.keys(a).filter(k => a[k].type === 'oauth' || a[k].type === 'api_key');
+        console.log(providers.length);
+      " 2>/dev/null || echo "0")
+      if [[ "${post_tokens:-0}" -gt 0 ]]; then
+        success "Logged in to $post_tokens provider(s)"
+      else
+        warn "No providers configured — run 'helios' later and type /login"
+      fi
+    else
+      warn "Auth not completed — run 'helios' later and type /login"
+    fi
+  else
+    info "Skipping login — run 'helios' later and type /login to connect your AI provider"
+  fi
+}
+
 # ─── Familiar Skills ──────────────────────────────────────────────────────────
 setup_familiar() {
   step "Familiar Skills (optional)"
@@ -2114,6 +2205,9 @@ main() {
     wire_env_to_shell
 
     setup_familiar        # Interactive: optional Familiar install
+
+    # Walk user through Pi OAuth login
+    setup_pi_auth
   fi
 
   # Non-interactive but light-weight — checkpoint not critical
