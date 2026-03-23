@@ -165,12 +165,25 @@ print_banner() {
   ║    ██║  ██║███████╗███████╗██║╚██████╔╝███████║              ║
   ║    ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝ ╚═════╝ ╚══════╝              ║
   ║                                                               ║
-  ║          Team Installer  •  Pi + Helios Orchestrator          ║
+  ║              Team Installer  •  Helios Orchestrator            ║
   ║                                                               ║
   ╚═══════════════════════════════════════════════════════════════╝
 BANNER
   echo -e "${RESET}"
   echo -e "  ${DIM}Log: $LOG_FILE${RESET}\n"
+}
+
+# ─── Timeout Wrapper (macOS lacks GNU timeout) ────────────────────────────────
+_timeout_cmd() {
+  if command -v timeout &>/dev/null; then
+    timeout "$@"
+  elif command -v gtimeout &>/dev/null; then
+    gtimeout "$@"
+  else
+    # No timeout available — run command without guard
+    shift  # discard the timeout duration argument
+    "$@"
+  fi
 }
 
 # ─── Progress Spinner ─────────────────────────────────────────────────────────
@@ -181,7 +194,7 @@ start_spinner() {
   local i=0
   printf '\033[?25l'
   while true; do
-    echo -ne "  ${CYAN}${frames[$i]}${RESET}  ${msg}\r"
+    echo -ne "  ${CYAN}${frames[$i]}${RESET}  ${msg}\r" > /dev/tty 2>/dev/null || true
     i=$(( (i+1) % ${#frames[@]} ))
     sleep 0.1
   done &
@@ -206,12 +219,16 @@ run_with_spinner() {
   tmp_err="$(mktemp)"
   # Run command: stdout to log file (not terminal — spinner is showing).
   # Stderr to temp file for error display on failure.
-  "$@" >> "$LOG_FILE" 2>"$tmp_err" &
+  # NOTE: stdin is /dev/null — commands passed here must not read stdin
+  _timeout_cmd "${STEP_TIMEOUT:-300}" "$@" >> "$LOG_FILE" 2>"$tmp_err" </dev/null &
   local cmd_pid=$!
   # Use || cmd_exit=$? to prevent set -e from firing on failed wait, which would
   # skip stop_spinner and leave the terminal in a corrupt state.
   local cmd_exit=0
   wait $cmd_pid || cmd_exit=$?
+  if [[ $cmd_exit -eq 124 ]]; then
+    echo "  ⚠ Timed out after ${STEP_TIMEOUT:-300}s" >> "$tmp_err" 2>/dev/null || true
+  fi
   stop_spinner
   # Append stderr to log file regardless of outcome
   cat "$tmp_err" >> "$LOG_FILE" 2>/dev/null || true
@@ -259,6 +276,10 @@ check_prerequisites() {
 
   local platform
   platform="$(current_platform)"
+
+  # Diagnostic: show environment for debugging
+  info "Platform: $platform | bash: ${BASH_VERSION:-unknown} | user: $(whoami)"
+  info "Node: $(node -v 2>/dev/null || echo 'not found') | npm: $(npm -v 2>/dev/null || echo 'not found') | prefix: $(npm config get prefix 2>/dev/null || echo 'n/a')"
 
   # ── Homebrew (macOS only) ──────────────────────────────────────────────────
   if [[ "$platform" == "macos" ]] && ! command -v brew &>/dev/null; then
@@ -450,12 +471,12 @@ check_prerequisites() {
 
 # ─── Pi Installation ──────────────────────────────────────────────────────────
 install_pi() {
-  step "Pi CLI (npm package)"
+  step "Helios CLI"
 
   if command -v pi &>/dev/null; then
     local pi_ver
     pi_ver=$(pi --version 2>/dev/null | head -1 || echo "unknown")
-    success "Pi CLI already installed: $pi_ver"
+    success "Helios CLI already installed: $pi_ver"
     PI_INSTALLED=true
     return 0
   fi
@@ -473,13 +494,28 @@ install_pi() {
   
   # Pre-flight: fix npm cache permissions (common macOS issue when npm was run with sudo)
   if [[ -d "$HOME/.npm" ]]; then
-    if ! npm cache verify >> "$LOG_FILE" 2>&1; then
+    if ! _timeout_cmd 60 npm cache verify >> "$LOG_FILE" 2>&1; then
       warn "npm cache issue detected — repairing..."
       chown -R "$(whoami)" "$HOME/.npm" >> "$LOG_FILE" 2>&1 || true
       npm cache clean --force >> "$LOG_FILE" 2>&1 || true
     fi
   fi
   
+
+  # macOS: check if npm global prefix is writable
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    local npm_prefix
+    npm_prefix="$(npm config get prefix 2>/dev/null || echo "")"
+    local npm_modules="${npm_prefix}/lib/node_modules"
+    if [[ -n "$npm_prefix" ]] && [[ -d "$npm_modules" ]] && [[ ! -w "$npm_modules" ]]; then
+      info "npm global dir not writable — redirecting to ~/.npm-global"
+      mkdir -p "$HOME/.npm-global"
+      npm config set prefix "$HOME/.npm-global"
+      export PATH="$HOME/.npm-global/bin:$PATH"
+    fi
+  fi
+
+
   # Fix npm global prefix on Linux when it points to /usr or /usr/local (requires sudo).
   # Redirect to ~/.npm-global so installs work without elevated privileges.
   if [[ "$(uname -s)" == "Linux" ]]; then
@@ -502,7 +538,7 @@ install_pi() {
   fi
 
   if run_with_spinner "Installing Helios CLI" \
-      npm install -g @mariozechner/pi-coding-agent; then
+      npm install -g @mariozechner/pi-coding-agent --fetch-timeout=240000; then
     PI_INSTALLED=true
     success "Helios installed: $(pi --version 2>/dev/null | tail -1 || echo 'ok')"
   else
@@ -512,7 +548,7 @@ install_pi() {
     npm cache clean --force >> "$LOG_FILE" 2>&1 || true
     
     if run_with_spinner "Retrying Helios CLI install" \
-        npm install -g @mariozechner/pi-coding-agent; then
+        npm install -g @mariozechner/pi-coding-agent --fetch-timeout=240000; then
       PI_INSTALLED=true
       success "Helios installed on retry: $(pi --version 2>/dev/null | tail -1 || echo 'ok')"
     else
@@ -811,7 +847,7 @@ install_helios_cli() {
 
 # ─── Pi Update (Install Packages) ─────────────────────────────────────────────
 install_packages() {
-  step "Installing Pi packages"
+  step "Installing Helios packages"
 
   # Check if packages were bundled in the tarball
   local bundled_count=0
@@ -857,24 +893,86 @@ install_packages() {
     fi
     return 0
   }
-  success "Pi packages installed"
+  success "Helios packages installed"
+}
+
+# ─── Bedrock AWS Credentials ──────────────────────────────────────────────────
+_setup_bedrock_credentials() {
+  local env_file="$PI_AGENT_DIR/.env"
+
+  echo ""
+  info "Bedrock requires AWS credentials"
+  echo -e "  ${DIM}  Get them from: AWS Console → IAM → Security Credentials${RESET}"
+  echo ""
+
+  ask "Set up AWS credentials now? [Y/n]:"
+  read -t 120 -r do_aws || do_aws=""
+  do_aws="${do_aws:-y}"
+
+  if [[ ! "$do_aws" =~ ^[Yy]$ ]]; then
+    warn "Skipping — add AWS credentials to ~/.pi/agent/.env before using Bedrock"
+    return 0
+  fi
+
+  ask "AWS_ACCESS_KEY_ID:"
+  read -t 120 -r aws_key_id || aws_key_id=""
+  if [[ -z "$aws_key_id" ]]; then
+    warn "No access key — add to ~/.pi/agent/.env later"
+    return 0
+  fi
+
+  ask "AWS_SECRET_ACCESS_KEY:"
+  read -t 120 -rs aws_secret || aws_secret=""
+  echo ""
+  if [[ -z "$aws_secret" ]]; then
+    warn "No secret key — add to ~/.pi/agent/.env later"
+    return 0
+  fi
+
+  ask "AWS_DEFAULT_REGION (default: us-east-1):"
+  read -t 120 -r aws_region || aws_region=""
+  aws_region="${aws_region:-us-east-1}"
+
+  touch "$env_file"
+  # Remove existing AWS entries, then append
+  grep -v "^AWS_ACCESS_KEY_ID=\|^AWS_SECRET_ACCESS_KEY=\|^AWS_DEFAULT_REGION=" "$env_file" > "${env_file}.tmp" 2>/dev/null || true
+  {
+    echo "AWS_ACCESS_KEY_ID=${aws_key_id}"
+    echo "AWS_SECRET_ACCESS_KEY=${aws_secret}"
+    echo "AWS_DEFAULT_REGION=${aws_region}"
+  } >> "${env_file}.tmp"
+  mv "${env_file}.tmp" "$env_file"
+  chmod 600 "$env_file"
+
+  success "AWS credentials saved (region: $aws_region)"
 }
 
 # ─── Provider Selection ───────────────────────────────────────────────────────
 select_provider() {
-  step "AI Provider Selection"
+  step "Provider Configuration"
+
+  if [[ -f "$PI_AGENT_DIR/settings.json" ]]; then
+    local current_provider
+    current_provider=$(python3 -c "import json; print(json.load(open('$PI_AGENT_DIR/settings.json')).get('defaultProvider','unknown'))" 2>/dev/null || echo "unknown")
+    success "Current provider: $current_provider"
+    ask "Change provider? [y/N]:"
+    read -t 120 -r change_provider || change_provider=""
+    if [[ ! "$change_provider" =~ ^[Yy]$ ]]; then
+      return 0
+    fi
+  fi
 
   echo ""
-  echo -e "  ${BOLD}Choose your primary AI provider:${RESET}"
+  echo -e "  ${BOLD}Select your AI provider:${RESET}"
   echo ""
-  echo -e "  ${CYAN}1)${RESET} ${BOLD}Anthropic Direct${RESET}        (claude-sonnet-4-5, claude-opus-4)"
-  echo -e "     ${DIM}Best for: Getting started quickly. Pay-per-use API.${RESET}"
+  echo -e "  ${CYAN}1)${RESET} ${BOLD}Anthropic${RESET}                (Claude via direct API)"
+  echo -e "     ${DIM}Auth: browser login — run 'helios' and type /login${RESET}"
   echo ""
-  echo -e "  ${CYAN}2)${RESET} ${BOLD}Amazon Bedrock${RESET}           (claude-opus-4, claude-sonnet-4-5 via AWS)"
-  echo -e "     ${DIM}Best for: Enterprise, existing AWS accounts, regional compliance.${RESET}"
+  echo -e "  ${CYAN}2)${RESET} ${BOLD}Amazon Bedrock${RESET}           (Claude via AWS)"
+  echo -e "     ${DIM}Auth: AWS access key + secret key${RESET}"
   echo ""
-  echo -e "  ${CYAN}3)${RESET} ${BOLD}OpenAI${RESET}                   (gpt-5.2, gpt-4o)"
-  echo -e "     ${DIM}Best for: OpenAI preference, GPT models.${RESET}"
+  echo -e "  ${CYAN}3)${RESET} ${BOLD}OpenAI${RESET}                   (GPT models)"
+  echo -e "     ${DIM}Auth: browser login — run 'helios' and type /login${RESET}"
   echo ""
   ask "Selection [1-3] (default: 1):"
   read -t 120 -r provider_choice || provider_choice=""
@@ -883,145 +981,30 @@ select_provider() {
   case "$provider_choice" in
     1)
       SELECTED_PROVIDER="anthropic"
-      SELECTED_MODEL="claude-sonnet-4-5"
-      PROVIDER_CONFIG="$INSTALLER_DIR/provider-configs/anthropic.json"
-      success "Selected: Anthropic Direct (claude-sonnet-4-5)"
+      [[ -f "$INSTALLER_DIR/provider-configs/anthropic.json" ]] && \
+        cp "$INSTALLER_DIR/provider-configs/anthropic.json" "$PI_AGENT_DIR/settings.json"
+      success "Selected: Anthropic — run 'helios' and type /login to authenticate"
       ;;
     2)
       SELECTED_PROVIDER="amazon-bedrock"
-      SELECTED_MODEL="us.anthropic.claude-opus-4-6-v1"
-      PROVIDER_CONFIG="$INSTALLER_DIR/provider-configs/bedrock.json"
-      success "Selected: Amazon Bedrock (claude-opus-4)"
-      warn "Make sure AWS CLI is configured: aws configure"
+      [[ -f "$INSTALLER_DIR/provider-configs/bedrock.json" ]] && \
+        cp "$INSTALLER_DIR/provider-configs/bedrock.json" "$PI_AGENT_DIR/settings.json"
+      success "Selected: Amazon Bedrock"
+      _setup_bedrock_credentials
       ;;
     3)
       SELECTED_PROVIDER="openai"
-      SELECTED_MODEL="gpt-5.2"
-      PROVIDER_CONFIG="$INSTALLER_DIR/provider-configs/openai.json"
-      success "Selected: OpenAI (gpt-5.2)"
+      [[ -f "$INSTALLER_DIR/provider-configs/openai.json" ]] && \
+        cp "$INSTALLER_DIR/provider-configs/openai.json" "$PI_AGENT_DIR/settings.json"
+      success "Selected: OpenAI — run 'helios' and type /login to authenticate"
       ;;
     *)
-      warn "Invalid selection — defaulting to Anthropic"
       SELECTED_PROVIDER="anthropic"
-      SELECTED_MODEL="claude-sonnet-4-5"
-      PROVIDER_CONFIG="$INSTALLER_DIR/provider-configs/anthropic.json"
+      [[ -f "$INSTALLER_DIR/provider-configs/anthropic.json" ]] && \
+        cp "$INSTALLER_DIR/provider-configs/anthropic.json" "$PI_AGENT_DIR/settings.json"
+      success "Defaulting to Anthropic"
       ;;
   esac
-
-  # MERGE provider config into existing settings.json (don't overwrite!)
-  if [[ -f "$PI_AGENT_DIR/settings.json" ]]; then
-    local merge_ok=false
-
-    # Try python3 first
-    if command -v python3 &>/dev/null && python3 -c "import json" 2>/dev/null; then
-      python3 -c "
-import json, sys
-
-with open(sys.argv[1]) as f:
-    existing = json.load(f)
-with open(sys.argv[2]) as f:
-    template = json.load(f)
-
-# Only merge provider-specific fields
-existing['defaultProvider'] = template['defaultProvider']
-existing['defaultModel'] = template['defaultModel']
-existing['assistantName'] = template.get('assistantName', existing.get('assistantName', 'Helios'))
-
-# Merge enabledModels: ADD template models to existing, don't replace
-template_models = set(template.get('enabledModels', []))
-existing_models = set(existing.get('enabledModels', []))
-existing['enabledModels'] = sorted(list(existing_models | template_models))
-
-# Helper to normalize package/skill identifiers for comparison
-def pkg_key(p):
-    if isinstance(p, str):
-        return p
-    if isinstance(p, dict):
-        return p.get('name', p.get('source', str(p)))
-    return str(p)
-
-# Merge skills: add any from template not already present (additive union)
-template_skills = template.get('skills', [])
-existing_skills = existing.get('skills', [])
-existing_skill_keys = set(pkg_key(s) for s in existing_skills)
-for s in template_skills:
-    if pkg_key(s) not in existing_skill_keys:
-        existing_skills.append(s)
-existing['skills'] = existing_skills
-
-# Merge packages: add any from template not already present (additive union)
-template_pkgs = template.get('packages', [])
-existing_pkgs = existing.get('packages', [])
-existing_pkg_keys = set(pkg_key(p) for p in existing_pkgs)
-for p in template_pkgs:
-    if pkg_key(p) not in existing_pkg_keys:
-        existing_pkgs.append(p)
-existing['packages'] = existing_pkgs
-
-# Merge extensions: add any from template not already present (additive union)
-template_exts = template.get('extensions', [])
-existing_exts = existing.get('extensions', [])
-existing_ext_keys = set(pkg_key(e) for e in existing_exts)
-for e in template_exts:
-    if pkg_key(e) not in existing_ext_keys:
-        existing_exts.append(e)
-existing['extensions'] = existing_exts
-
-# Ensure other required keys
-existing.setdefault('enableSkillCommands', True)
-existing.setdefault('hideThinkingBlock', False)
-existing['quietStartup'] = existing.get('quietStartup', template.get('quietStartup', True))
-
-with open(sys.argv[1], 'w') as f:
-    json.dump(existing, f, indent=2)
-    f.write('\n')
-
-print('Merged provider config into existing settings.json')
-" "$PI_AGENT_DIR/settings.json" "$PROVIDER_CONFIG" && merge_ok=true || true
-    fi
-
-    # Fallback to node if python3 failed
-    if [[ "$merge_ok" == false ]] && command -v node &>/dev/null; then
-      node -e "
-const fs = require('fs');
-const existing = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
-const template = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-existing.defaultProvider = template.defaultProvider;
-existing.defaultModel = template.defaultModel;
-existing.assistantName = template.assistantName || existing.assistantName || 'Helios';
-// Merge enabledModels (additive union)
-const tModels = new Set(template.enabledModels || []);
-const eModels = new Set(existing.enabledModels || []);
-existing.enabledModels = [...new Set([...eModels, ...tModels])].sort();
-// Merge skills (additive union by name)
-const pkgKey = (p) => typeof p === 'string' ? p : (p.name || p.source || JSON.stringify(p));
-const eSkillKeys = new Set((existing.skills || []).map(pkgKey));
-for (const s of (template.skills || [])) { if (!eSkillKeys.has(pkgKey(s))) (existing.skills = existing.skills || []).push(s); }
-// Merge packages (additive union by name)
-const ePkgKeys = new Set((existing.packages || []).map(pkgKey));
-for (const p of (template.packages || [])) { if (!ePkgKeys.has(pkgKey(p))) (existing.packages = existing.packages || []).push(p); }
-// Merge extensions (additive union by key)
-const eExtKeys = new Set((existing.extensions || []).map(pkgKey));
-for (const e of (template.extensions || [])) { if (!eExtKeys.has(pkgKey(e))) (existing.extensions = existing.extensions || []).push(e); }
-// Preserve boolean settings from template
-for (const k of ['enableSkillCommands','hideThinkingBlock','quietStartup']) {
-  if (template[k] !== undefined && existing[k] === undefined) existing[k] = template[k];
-}
-fs.writeFileSync(process.argv[1], JSON.stringify(existing, null, 2) + '\n');
-console.log('Merged provider config via node fallback');
-" -- "$PI_AGENT_DIR/settings.json" "$PROVIDER_CONFIG" && merge_ok=true || true
-    fi
-
-    if [[ "$merge_ok" == false ]]; then
-      warn "JSON merge failed (python3 and node both unavailable or errored)"
-      warn "Copying provider template as settings.json"
-      cp "$PROVIDER_CONFIG" "$PI_AGENT_DIR/settings.json"
-    fi
-  else
-    # No existing settings.json — use template as-is
-    cp "$PROVIDER_CONFIG" "$PI_AGENT_DIR/settings.json"
-  fi
-  success "settings.json configured for $SELECTED_PROVIDER"
 }
 
 # ─── Skill-Graph Dependencies ─────────────────────────────────────────────────
@@ -1044,6 +1027,53 @@ install_skill_deps() {
       info "You can retry: cd '$sg_dir' && npm install --legacy-peer-deps"
     }
   fi
+}
+
+# ─── Helios Browse (Browser Automation) ───────────────────────────────────────
+setup_helios_browse() {
+  step "Helios Browse (Browser Automation)"
+
+  # Install playwright-core if not present
+  if node -e "require('playwright-core')" 2>/dev/null; then
+    success "playwright-core available"
+  else
+    run_with_spinner "Installing playwright-core" \
+      bash -c "cd '$PI_AGENT_DIR' && npm install --no-save playwright-core 2>&1" || {
+      warn "playwright-core install failed — browser automation will be unavailable"
+      info "You can retry: cd ~/.pi/agent && npm install playwright-core"
+      INSTALL_WARNINGS+=("playwright-core failed — browser automation unavailable")
+      return 0
+    }
+  fi
+
+  # Install Chromium browser binary
+  if compgen -G "$HOME/.cache/ms-playwright/chromium-*" > /dev/null 2>&1; then
+    success "Chromium browser already installed"
+  else
+    run_with_spinner "Installing Chromium for browser automation" \
+      bash -c "npx playwright-core install chromium 2>&1" || {
+      warn "Chromium install failed — you can install later: npx playwright-core install chromium"
+      INSTALL_WARNINGS+=("Chromium not installed — run: npx playwright-core install chromium")
+    }
+  fi
+
+  # Apply browse Memgraph schema
+  local migrate="$PI_AGENT_DIR/scripts/skill-graph/migrate-browse-schema.js"
+  if [[ -f "$migrate" ]]; then
+    local mg_running=""
+    mg_running=$(resolve_memgraph_container 2>/dev/null) || mg_running=""
+    if [[ -n "$mg_running" ]]; then
+      node "$migrate" >> "$LOG_FILE" 2>&1 && info "Browse schema applied" || \
+        warn "Browse schema migration had issues — see $LOG_FILE"
+    else
+      info "Memgraph not running — browse schema will apply on first use"
+    fi
+  fi
+
+  # Create browser profile/session directories
+  mkdir -p "$HOME/.pi/browser-profiles" "$HOME/.pi/browser-sessions"
+  chmod 700 "$HOME/.pi/browser-profiles"
+  success "Helios Browse configured"
 }
 
 # ─── Governance Extension Dependencies ────────────────────────────────────────
@@ -1473,98 +1503,61 @@ with open(target, 'w') as f:
 
 # ─── API Key Setup ────────────────────────────────────────────────────────────
 setup_api_keys() {
-  step "API Key Setup"
+  step "Service Keys (optional)"
+
+  # Helios handles AI provider auth via OAuth (browser login on first run).
+  # These are only for ancillary services that need API keys.
 
   local env_file="$PI_AGENT_DIR/.env"
-  local env_template="$INSTALLER_DIR/.env.template"
 
-  # Load existing .env if present
   if [[ -f "$env_file" ]]; then
-    info ".env already exists — updating only empty values"
-  else
-    cp "$env_template" "$env_file"
-    chmod 600 "$env_file"
-    info "Created .env from template"
+    info ".env exists — skipping (edit manually if needed)"
+    success "Service keys file present"
+    return
   fi
 
-  echo ""
-  echo -e "  ${BOLD}API Keys${RESET} ${DIM}(press Enter to skip and fill in later)${RESET}"
-  echo ""
+  # Create minimal .env for ancillary services only
+  cat > "$env_file" << 'ENV_EOF'
+# Helios Service Keys (optional)
+# AI provider auth is handled by Helios OAuth — run 'helios' to log in.
+# These keys are for ancillary services only.
 
-  # Helper: prompt for key if not already set
-  prompt_key() {
-    local key_name="$1"
-    local description="$2"
-    local required="${3:-optional}"
-    local current_val
-    current_val=$(grep "^${key_name}=" "$env_file" 2>/dev/null | cut -d'=' -f2- || echo "")
+# GitHub token — for PR review via MCP (github.com/settings/tokens)
+GITHUB_TOKEN=
 
-    if [[ -n "$current_val" ]]; then
-      info "$key_name already set — skipping"
-      return
-    fi
+# AWS credentials — required for Amazon Bedrock provider
+# Get from: AWS Console → IAM → Security Credentials
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+AWS_DEFAULT_REGION=us-east-1
 
-    local label="${GREEN}[required]${RESET}"
-    [[ "$required" == "optional" ]] && label="${DIM}[optional]${RESET}"
-    [[ "$required" == "recommended" ]] && label="${YELLOW}[recommended]${RESET}"
+# Groq — for Whisper transcription (console.groq.com)
+GROQ_API_KEY=
 
-    ask "$key_name $label — $description:"
-    read -t 120 -rs key_val || key_val=""
-    echo ""  # newline after silent read
-
-    if [[ -n "$key_val" ]]; then
-      # Update the env file safely (avoid shell injection from unescaped values)
-      grep -v "^${key_name}=" "$env_file" > "${env_file}.tmp" 2>/dev/null || true
-      printf '%s=%s\n' "${key_name}" "${key_val}" >> "${env_file}.tmp"
-      mv "${env_file}.tmp" "$env_file"
-      success "$key_name saved"
-    else
-      warn "$key_name skipped — add to $env_file later"
-      INSTALL_WARNINGS+=("$key_name not set — edit ~/.pi/agent/.env")
-    fi
-  }
-
-  # Provider-specific required key
-  case "$SELECTED_PROVIDER" in
-    anthropic)
-      prompt_key "ANTHROPIC_API_KEY" "from console.anthropic.com/api-keys" "required"
-      ;;
-    amazon-bedrock)
-      prompt_key "AWS_ACCESS_KEY_ID" "from AWS IAM Console" "required"
-      prompt_key "AWS_SECRET_ACCESS_KEY" "from AWS IAM Console" "required"
-      echo ""
-      ask "AWS_DEFAULT_REGION (default: us-east-1):"
-      read -t 120 -r aws_region || aws_region=""
-      aws_region="${aws_region:-us-east-1}"
-      grep -v "^AWS_DEFAULT_REGION=" "$env_file" > "${env_file}.tmp" 2>/dev/null || true
-      printf '%s=%s\n' "AWS_DEFAULT_REGION" "${aws_region}" >> "${env_file}.tmp"
-      mv "${env_file}.tmp" "$env_file"
-      ;;
-    openai)
-      prompt_key "OPENAI_API_KEY" "from platform.openai.com/api-keys" "required"
-      ;;
-  esac
-
-  echo ""
-  echo -e "  ${DIM}Additional keys (optional but recommended):${RESET}"
-  prompt_key "GITHUB_TOKEN" "github.com/settings/tokens (for PR review MCP)" "recommended"
-  prompt_key "GROQ_API_KEY" "for transcription/Whisper (console.groq.com)" "optional"
-  prompt_key "FIGMA_MCP_TOKEN" "for Figma MCP server (figma.com → Account → API tokens)" "optional"
-  prompt_key "ANTHROPIC_API_KEY" "for fallback if primary is Bedrock/OpenAI" "optional"
-
-  success ".env configured at $env_file"
-  # Secure .env permissions (API keys should not be world-readable)
+# Figma — for design MCP (figma.com → Account → API tokens)
+FIGMA_MCP_TOKEN=
+ENV_EOF
   chmod 600 "$env_file"
+
+  echo ""
+  echo -e "  ${DIM}Optional service keys can be added to: ~/.pi/agent/.env${RESET}"
+  echo -e "  ${DIM}Helios handles AI provider auth automatically when you run 'helios'.${RESET}"
+
+  success ".env created (service keys — edit later if needed)"
 }
 
-# ─── Wire API Keys to Shell ───────────────────────────────────────────────────
+# ─── Wire Service Keys to Shell ──────────────────────────────────────────────
 wire_env_to_shell() {
-  step "Wiring API keys to shell environment"
+  step "Shell Environment"
 
   local env_file="$PI_AGENT_DIR/.env"
-  local shell_profile=""
 
-  # Detect shell profile
+  if [[ ! -f "$env_file" ]]; then
+    info "No .env file — skipping shell wiring"
+    return
+  fi
+
+  local shell_profile=""
   if [[ -n "${ZSH_VERSION:-}" ]] || [[ "$SHELL" == */zsh ]]; then
     shell_profile="$HOME/.zshrc"
   elif [[ -n "${BASH_VERSION:-}" ]] || [[ "$SHELL" == */bash ]]; then
@@ -1577,44 +1570,107 @@ wire_env_to_shell() {
     shell_profile="$HOME/.profile"
   fi
 
-  local source_line="# Helios/Pi API keys"
   local source_cmd="[ -f ~/.pi/agent/.env ] && set -a && source ~/.pi/agent/.env && set +a"
 
-  if grep -qF "source ~/.pi/agent/.env" "$shell_profile" 2>/dev/null || grep -qF ".pi/agent/.env" "$shell_profile" 2>/dev/null; then
-    success "Shell profile already sources .env"
+  if grep -qF ".pi/agent/.env" "$shell_profile" 2>/dev/null; then
+    success "Shell already sources .env"
   else
     echo "" >> "$shell_profile"
-    echo "$source_line" >> "$shell_profile"
+    echo "# Helios service keys" >> "$shell_profile"
     echo "$source_cmd" >> "$shell_profile"
     success "Added .env sourcing to $shell_profile"
   fi
+}
 
-  # Source now for immediate use
-  if [[ -f "$env_file" ]]; then
-    # L4 fix: use first-'='-only split so values containing '=' (e.g. base64
-    # API keys, URLs with query strings like https://host?a=b) are preserved
-    # verbatim.  The previous approach (IFS-equals-read) relied on bash re-joining
-    # extra fields which is fragile for API keys that contain '=' padding.
-    while IFS= read -r _env_line; do
-      # Strip leading whitespace and skip comments / blanks
-      _env_line="${_env_line#"${_env_line%%[! ]*}"}"
-      [[ -z "$_env_line" || "$_env_line" == \#* ]] && continue
-      # Split on FIRST '=' only
-      _env_key="${_env_line%%=*}"
-      _env_val="${_env_line#*=}"
-      _env_key="${_env_key#export }"            # strip optional 'export ' prefix
-      _env_key="${_env_key#"${_env_key%%[! ]*}"}" # trim leading whitespace
-      _env_key="${_env_key%"${_env_key##*[! ]}"}" # trim trailing whitespace
-      _env_val="${_env_val#"${_env_val%%[! ]*}"}" # trim leading whitespace
-      _env_val="${_env_val%"${_env_val##*[! ]}"}" # trim trailing whitespace
-      _env_val="${_env_val#\"}" ; _env_val="${_env_val%\"}"  # strip double quotes
-      _env_val="${_env_val#\'}" ; _env_val="${_env_val%\'}"  # strip single quotes
-      [[ "$_env_key" =~ ^[A-Z_][A-Z_0-9]*$ ]] && [[ -n "$_env_val" ]] && export "$_env_key=$_env_val"
-    done < "$env_file"
-    success "API keys loaded into current session"
+# ─── Pi Auth (OAuth browser login) ────────────────────────────────────────────
+setup_pi_auth() {
+  step "AI Provider Login"
+
+  # Check if Pi is available
+  local pi_cmd=""
+  if command -v helios &>/dev/null; then
+    pi_cmd="helios"
+  elif command -v pi &>/dev/null; then
+    pi_cmd="pi"
+  elif [[ -f "$HOME/.npm-global/bin/pi" ]]; then
+    pi_cmd="$HOME/.npm-global/bin/pi"
+  elif [[ -f "$HOME/.local/bin/helios" ]]; then
+    pi_cmd="$HOME/.local/bin/helios"
   fi
 
-  warn "Restart your terminal or run: source $shell_profile"
+  if [[ -z "$pi_cmd" ]]; then
+    warn "Helios CLI not found — you can log in later by running 'helios'"
+    return 0
+  fi
+
+  # Check if user already has auth tokens
+  local auth_file="$PI_AGENT_DIR/auth.json"
+  if [[ -f "$auth_file" ]]; then
+    local has_tokens
+    has_tokens=$(node -e "
+      const a = require('$auth_file');
+      const providers = Object.keys(a).filter(k => a[k].type === 'oauth' || a[k].type === 'api_key');
+      console.log(providers.length);
+    " 2>/dev/null || echo "0")
+    if [[ "${has_tokens:-0}" -gt 0 ]]; then
+      success "Already logged in ($has_tokens provider(s) configured)"
+      return 0
+    fi
+  fi
+
+  echo ""
+  echo -e "  ${BOLD}Helios needs to connect to an AI provider.${RESET}"
+  echo ""
+  echo -e "  ${DIM}This will open Pi, where you can log in to your AI provider${RESET}"
+  echo -e "  ${DIM}(Anthropic, OpenAI, Google, etc.) via your browser.${RESET}"
+  echo ""
+  echo -e "  ${DIM}Inside Pi:${RESET}"
+  echo -e "    ${CYAN}1.${RESET} Type ${BOLD}/login${RESET} and press Enter"
+  echo -e "    ${CYAN}2.${RESET} Select your AI provider"
+  echo -e "    ${CYAN}3.${RESET} Log in via the browser window that opens"
+  echo -e "    ${CYAN}4.${RESET} Type ${BOLD}/exit${RESET} to return to the installer"
+  echo ""
+  # Skip if non-interactive (e.g., piped install, CI)
+  if [[ ! -t 0 ]]; then
+    info "Non-interactive mode — skipping login (run 'helios' later and type /login)"
+    return 0
+  fi
+
+  ask "Open Helios now to log in? [Y/n]:"
+  read -t 120 -r do_login || do_login=""
+  do_login="${do_login:-y}"
+
+  if [[ "$do_login" =~ ^[Yy]$ ]]; then
+    echo ""
+    info "Launching Helios — type /login to connect your AI provider, then /exit when done"
+    echo -e "  ${DIM}────────────────────────────────────────────────────${RESET}"
+    echo ""
+
+    # Launch Pi interactively — user will type /login, authenticate, then /exit
+    "$pi_cmd" || true
+
+    echo ""
+    echo -e "  ${DIM}────────────────────────────────────────────────────${RESET}"
+
+    # Check if auth was successful
+    if [[ -f "$auth_file" ]]; then
+      local post_tokens
+      post_tokens=$(node -e "
+        const a = require('$auth_file');
+        const providers = Object.keys(a).filter(k => a[k].type === 'oauth' || a[k].type === 'api_key');
+        console.log(providers.length);
+      " 2>/dev/null || echo "0")
+      if [[ "${post_tokens:-0}" -gt 0 ]]; then
+        success "Logged in to $post_tokens provider(s)"
+      else
+        warn "No providers configured — run 'helios' later and type /login"
+      fi
+    else
+      warn "Auth not completed — run 'helios' later and type /login"
+    fi
+  else
+    info "Skipping login — run 'helios' later and type /login to connect your AI provider"
+  fi
 }
 
 # ─── Familiar Skills ──────────────────────────────────────────────────────────
@@ -1649,8 +1705,21 @@ setup_familiar() {
     return 0
   fi
 
-  if ! run_with_spinner "Cloning familiar → ~/.familiar/" \
-    git clone --single-branch --depth 1 "https://$FAMILIAR_REPO.git" "$FAMILIAR_DIR"; then
+  # Check GitHub auth for private repo access
+  if ! gh auth status &>/dev/null 2>&1; then
+    warn "Familiar is a private repo — GitHub authentication required"
+    ask "Run 'gh auth login' now? [Y/n]:"
+    read -t 120 -r do_gh_auth || do_gh_auth=""
+    do_gh_auth="${do_gh_auth:-y}"
+    if [[ "$do_gh_auth" =~ ^[Yy]$ ]]; then
+      gh auth login || { warn "GitHub auth failed — skipping Familiar"; return 0; }
+    else
+      info "Skipping Familiar — run 'gh auth login' later, then clone manually"
+      return 0
+    fi
+  fi
+
+  if ! git clone --single-branch --depth 1 "https://$FAMILIAR_REPO.git" "$FAMILIAR_DIR" 2>&1; then
     warn "Could not clone Familiar (repository may require authentication)"
     info "To install Familiar later: gh auth login && git clone https://$FAMILIAR_REPO.git ~/.familiar"
     info "Familiar enables Gmail, Calendar, and Drive skills — it's optional."
@@ -1795,12 +1864,12 @@ run_verification() {
     local keys_set
     keys_set=$(grep -v '^#' "$env_file" 2>/dev/null | grep -v '^$' | grep -v '=$' | _count) || keys_set=0
     if [[ "$keys_set" -gt 0 ]]; then
-      success ".env: $keys_set key(s) configured"
+      success ".env: $keys_set service key(s) configured"
     else
-      warn ".env exists but no keys are set — add at least one API key"
+      info ".env exists — no service keys set (optional, AI auth handled by Helios)"
     fi
   else
-    warn ".env not found at $env_file"
+    info ".env not found — service keys are optional (AI auth handled by Helios)"
   fi
 
   # settings.json
@@ -1838,8 +1907,11 @@ print_quickstart() {
   fi
   echo ""
   echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-  echo -e "${BOLD}${GREEN}  ✓ Helios + Pi Installation Complete!${RESET} ${DIM}(installer v${INSTALLER_VERSION})${RESET}"
+  echo -e "${BOLD}${GREEN}  ✓ Helios Installation Complete!${RESET} ${DIM}(installer v${INSTALLER_VERSION})${RESET}"
   echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+  local helios_ver
+  helios_ver=$(helios --version 2>/dev/null || pi --version 2>/dev/null || echo "unknown")
+  echo -e "  ${GREEN}${BOLD}Helios ${helios_ver}${RESET} ${DIM}(installer v${INSTALLER_VERSION})${RESET}"
 
   # Ensure PATH is set for remainder of installer + user session
   if ! command -v helios &>/dev/null && [[ -f "$HOME/.local/bin/helios" ]]; then
@@ -1861,7 +1933,7 @@ print_quickstart() {
   echo -e "       ${DIM}\"Plan and implement user authentication\"${RESET}"
   echo ""
   echo -e "  ${BOLD}Key Files:${RESET}"
-  echo -e "    ${DIM}~/.pi/agent/.env${RESET}          — API keys (edit to add/change)"
+  echo -e "    ${DIM}~/.pi/agent/.env${RESET}          — Service keys (GitHub, Groq — optional)"
   echo -e "    ${DIM}~/.pi/agent/settings.json${RESET} — Provider/model config"
   echo -e "    ${DIM}~/.pi/agent/agents/${RESET}        — Agent definitions"
   echo -e "    ${DIM}~/.pi/agent/skills/${RESET}        — Skill definitions"
@@ -1872,19 +1944,12 @@ print_quickstart() {
   echo -e "    ${DIM}bash ~/helios-team-installer/install.sh${RESET}  — Update everything"
   echo -e "    ${DIM}bash $INSTALLER_DIR/verify.sh${RESET}   — Run health check"
   echo -e "    ${DIM}bash $INSTALLER_DIR/uninstall.sh${RESET} — Uninstall"
-  echo -e "    ${DIM}bash install.sh --fresh${RESET}  — Re-run full setup (provider, keys)"
+  echo -e "    ${DIM}bash install.sh --fresh${RESET}  — Re-run full setup"
   echo ""
   echo -e "  ${BOLD}Troubleshooting:${RESET}  ${DIM}See $INSTALLER_DIR/README.md${RESET}"
   echo ""
-  if [[ -f "$PI_AGENT_DIR/.env" ]]; then
-    local keys_missing
-    keys_missing=$(grep -c '^[A-Z_]*=$' "$PI_AGENT_DIR/.env" 2>/dev/null || echo "0")
-    keys_missing="${keys_missing//[^0-9]/}"
-    keys_missing="${keys_missing:-0}"
-    if [[ "${keys_missing:-0}" -gt 0 ]]; then
-      echo -e "  ${YELLOW}⚠ ${keys_missing} API key(s) not yet set. Edit: ${DIM}~/.pi/agent/.env${RESET}"
-    fi
-  fi
+  echo -e "  ${CYAN}ℹ ${RESET}${BOLD}Run 'helios' to log in to your AI provider.${RESET}"
+  echo -e "  ${DIM}  Helios handles authentication via browser login — no API keys needed.${RESET}"
   echo ""
 }
 
@@ -1920,10 +1985,8 @@ detect_update_mode() {
     if [[ -n "$current_provider" ]] && [[ "$current_provider" != "null" ]] && [[ "$current_provider" != "undefined" ]]; then
       if [[ -f "$PI_AGENT_DIR/.env" ]]; then
         UPDATE_MODE=true
-        SELECTED_PROVIDER="$current_provider"
-        SELECTED_MODEL="${current_model:-}"
-        info "Existing install detected (provider: $SELECTED_PROVIDER)"
-        info "Running in update mode — skipping provider/key prompts"
+        info "Existing install detected"
+        info "Running in update mode — skipping interactive steps"
         info "To re-run full setup: bash install.sh --fresh"
         echo ""
       fi
@@ -2321,7 +2384,7 @@ main() {
 
   if [[ "$UPDATE_MODE" == false ]]; then
     run_step "Prerequisites"     check_prerequisites
-    run_step "Pi CLI (npm)"  install_pi
+    run_step "Helios CLI"  install_pi
     run_step "Helios Agent"          setup_helios_agent || { error "Helios Agent setup failed"; exit 1; }
     run_step "Helios CLI (symlink)"  install_helios_cli
     # Interactive — must not go through run_step (captures stdout, breaks read prompts)
@@ -2334,8 +2397,9 @@ main() {
     install_pi
   fi
 
-  run_step "Pi Packages"       install_packages
+  run_step "Helios Packages"       install_packages
   run_step "Skill Dependencies" install_skill_deps
+  run_step "Helios Browse"      setup_helios_browse
   run_step "Governance Deps"    install_governance_deps
 
   if [[ "$UPDATE_MODE" == false ]]; then
@@ -2353,6 +2417,9 @@ main() {
     wire_env_to_shell
 
     setup_familiar        # Interactive: optional Familiar install
+
+    # Walk user through Pi OAuth login
+    setup_pi_auth
   fi
 
   # Non-interactive but light-weight — checkpoint not critical

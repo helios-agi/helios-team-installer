@@ -205,7 +205,7 @@ if [[ "$PLATFORM" == "Darwin" ]] && ! command -v brew &>/dev/null; then
     fi
     command -v brew &>/dev/null && echo -e "  ${GREEN}✓${RESET} Homebrew installed" || { echo -e "  ${RED}✗${RESET} Homebrew install failed"; exit 1; }
     # FIX #5: Persist Homebrew PATH to shell profile so it survives new terminals
-    local brew_shellenv=""
+    brew_shellenv=""
     if [[ -x /opt/homebrew/bin/brew ]]; then
       brew_shellenv='eval "$(/opt/homebrew/bin/brew shellenv)"'
     elif [[ -x /usr/local/bin/brew ]]; then
