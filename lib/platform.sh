@@ -62,7 +62,27 @@ _install_nodejs() {
   
   case "$platform" in
     macos)
-      brew install node >> "${LOG_FILE:-/dev/null}" 2>&1
+      if command -v brew &>/dev/null; then
+        brew install node >> "${LOG_FILE:-/dev/null}" 2>&1
+      else
+        # No Homebrew (non-admin user) — install via fnm (no admin required)
+        echo "  No Homebrew available — installing Node.js via fnm..." >&2
+        if curl -fsSL https://fnm.vercel.app/install 2>/dev/null | bash -s -- --skip-shell >> "${LOG_FILE:-/dev/null}" 2>&1; then
+          export FNM_DIR="$HOME/.local/share/fnm"
+          export PATH="$FNM_DIR:$PATH"
+          if [[ -x "$FNM_DIR/fnm" ]]; then
+            eval "$("$FNM_DIR/fnm" env --shell bash)" 2>/dev/null || true
+            "$FNM_DIR/fnm" install 22 >> "${LOG_FILE:-/dev/null}" 2>&1
+            eval "$("$FNM_DIR/fnm" env --shell bash)" 2>/dev/null || true
+          fi
+        fi
+        if ! command -v node &>/dev/null; then
+          echo "  Node.js install failed without Homebrew." >&2
+          echo "  Option 1: Make your user an admin → re-run (gets Homebrew)" >&2
+          echo "  Option 2: Download from https://nodejs.org (.pkg installer)" >&2
+          return 1
+        fi
+      fi
       ;;
     linux|wsl)
       if command -v apt-get &>/dev/null && command -v curl &>/dev/null; then

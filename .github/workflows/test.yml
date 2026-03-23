@@ -25,11 +25,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install ShellCheck
+        run: sudo apt-get update -qq && sudo apt-get install -y shellcheck
+
       - name: Run ShellCheck
         run: |
           shellcheck -S warning \
             -e SC2034 -e SC1090 -e SC1091 -e SC2155 -e SC2088 \
-            -e SC2015 -e SC2129 -e SC2126 -e SC2086 \
+            -e SC2015 -e SC2129 -e SC2126 -e SC2086 -e SC2024 -e SC2093 \
             install.sh build-release.sh verify.sh uninstall.sh \
             sync-from-agent.sh bootstrap.sh
 

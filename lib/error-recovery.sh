@@ -32,8 +32,7 @@ RESET="${RESET:-}"
 # 1. STEP TRACKING
 # =============================================================================
 
-# TOTAL_STEPS should be set by the calling script before run_step calls
-TOTAL_STEPS=${TOTAL_STEPS:-0}
+TOTAL_STEPS=14
 CURRENT_STEP=0
 
 # step_start <step_name>
@@ -59,14 +58,14 @@ step_done() {
 step_fail() {
   local error_msg="${1:-unknown error}"
   local exit_code="${2:-1}"
-  printf " ${RED}✗${RESET}\n"
+  printf " ${RED}✗ FAILED${RESET}\n"
   # Show last 20 lines of captured output so user can see what failed
   if [[ -n "$error_msg" ]] && [[ "$error_msg" != "unknown error" ]]; then
     echo -e "  ${DIM}--- step output (last 20 lines) ---${RESET}" >&2
     echo "$error_msg" | tail -20 >&2
     echo -e "  ${DIM}---${RESET}" >&2
   fi
-  echo -e "  ${RED}Step failed (exit $exit_code).${RESET} Full log: \${LOG_FILE:-see above}" >&2
+  echo -e "  ${RED}Step failed (exit $exit_code).${RESET} Full log: ${LOG_FILE:-see above}" >&2
   generate_diagnostic_dump "${_CURRENT_STEP_NAME:-unknown}" "$exit_code"
   offer_troubleshoot "$error_msg" "${_CURRENT_STEP_NAME:-unknown}"
 }
@@ -83,12 +82,12 @@ retry_with_backoff() {
   local max_retries="$1"
   local description="$2"
   shift 2
+  local cmd=("$@")
+
   # Backoff delays (indexed from 0 = first retry)
   local backoff_delays="2 5 10 20"
   local attempt=0
   local exit_code=0
-  local delay=20
-  local i=0
 
   while true; do
     "$@" ; exit_code=$?
@@ -102,10 +101,8 @@ retry_with_backoff() {
     fi
 
     # Pick delay: use the nth value if available, else last value (20)
-    delay=20
-    i=0
-    # Intentional unquoted: space-delimited string iterated as words (Bash 3.2 compat)
-    # shellcheck disable=SC2086
+    local delay=20
+    local i=0
     for d in $backoff_delays; do
       if [ "$i" -eq "$(( attempt - 1 ))" ]; then
         delay="$d"
@@ -364,8 +361,6 @@ offer_troubleshoot() {
     case "${answer:-Y}" in
       [Yy]* | "")
         echo -e "  ${CYAN}Applying fix...${RESET}"
-        # SAFE: $fix is only from static _KNOWN_FIX_CMDS — no user input
-        # shellcheck disable=SC2091
         if eval "$fix"; then
           echo -e "  ${GREEN}Fix applied successfully.${RESET}"
           return 0
@@ -393,36 +388,20 @@ offer_troubleshoot() {
 CHECKPOINT_FILE="${CHECKPOINT_FILE:-$HOME/.pi/agent/.install-checkpoint}"
 
 # save_checkpoint
-# Persists CURRENT_STEP (and metadata) to the checkpoint file as JSON.
+# Persists CURRENT_STEP to the checkpoint file.
 save_checkpoint() {
   mkdir -p "$(dirname "$CHECKPOINT_FILE")" 2>/dev/null || true
-  cat > "$CHECKPOINT_FILE" << EOF
-{"step":$CURRENT_STEP,"stepName":"${_CURRENT_STEP_NAME:-unknown}","installerVersion":"${INSTALLER_VERSION:-unknown}"}
-EOF
+  echo "$CURRENT_STEP" > "$CHECKPOINT_FILE"
 }
 
 # load_checkpoint
-# Echoes the last completed step number, or 0 if none / version mismatch.
+# Echoes the last completed step number, or 0 if none.
 load_checkpoint() {
-  if [[ ! -f "$CHECKPOINT_FILE" ]]; then
+  if [ -f "$CHECKPOINT_FILE" ]; then
+    cat "$CHECKPOINT_FILE"
+  else
     echo 0
-    return
   fi
-  local content
-  content="$(cat "$CHECKPOINT_FILE")"
-  # Handle legacy bare-integer format
-  if [[ "$content" =~ ^[0-9]+$ ]]; then
-    echo "$content"
-    return
-  fi
-  # Validate installer version matches
-  local saved_version
-  saved_version=$(echo "$content" | grep -o '"installerVersion":"[^"]*"' | cut -d'"' -f4)
-  if [[ "$saved_version" != "${INSTALLER_VERSION:-unknown}" ]]; then
-    echo 0  # Version mismatch — start fresh
-    return
-  fi
-  echo "$content" | grep -o '"step":[0-9]*' | grep -o '[0-9]*'
 }
 
 # clear_checkpoint
@@ -491,10 +470,20 @@ run_step() {
   local tmp_output
   tmp_output="$(mktemp /tmp/helios-step-XXXXXX 2>/dev/null || echo "/tmp/helios-step-$$")"
 
+  # ── Start heartbeat (background dots every 10s) ────────────────────
+  (
+    while sleep 10; do
+      printf "." >&2
+    done
+  ) &
+  local heartbeat_pid=$!
+  
   # ── Run command ─────────────────────────────────────────────────────
   local exit_code=0
-  export _INSIDE_RUN_STEP=true
   if "${cmd[@]}" >"$tmp_output" 2>&1; then
+    # Kill heartbeat
+    kill "$heartbeat_pid" 2>/dev/null || true
+    wait "$heartbeat_pid" 2>/dev/null || true
     _INSIDE_RUN_STEP=false
     _kill_hb
     step_done
@@ -502,6 +491,10 @@ run_step() {
     rm -f "$tmp_output"
     return 0
   else
+    # Kill heartbeat on failure
+    kill "$heartbeat_pid" 2>/dev/null || true
+    wait "$heartbeat_pid" 2>/dev/null || true
+    
     exit_code=$?
     _INSIDE_RUN_STEP=false
     _kill_hb
@@ -509,7 +502,7 @@ run_step() {
     captured_output="$(cat "$tmp_output" 2>/dev/null)"
     rm -f "$tmp_output"
 
-    step_fail "$captured_output" "$exit_code"
+    step_fail "$captured_output"
 
     # ── Troubleshoot and optionally retry once ──────────────────────
     if offer_troubleshoot "$captured_output" "$step_name"; then
