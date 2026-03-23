@@ -311,6 +311,7 @@ check_prerequisites() {
 
   # ── One-time apt-get update (linux/wsl) ────────────────────────────────────
   if [[ "$platform" == "linux" ]] || [[ "$platform" == "wsl" ]]; then
+    # shellcheck disable=SC2024
     sudo apt-get update -y >> "$LOG_FILE" 2>&1 || true
   fi
 
@@ -328,6 +329,7 @@ check_prerequisites() {
         macos)
           brew install "$brew_pkg" >> "$LOG_FILE" 2>&1 ;;
         linux|wsl)
+          # shellcheck disable=SC2024
           sudo apt-get install -y "$apt_pkg" >> "$LOG_FILE" 2>&1 ;;
         *)
           warn "$cmd: unsupported platform ($platform) — install manually"
@@ -395,6 +397,7 @@ check_prerequisites() {
         brew install python3 >> "$LOG_FILE" 2>&1
         ;;
       linux|wsl)
+        # shellcheck disable=SC2024
         sudo apt-get install -y python3 >> "$LOG_FILE" 2>&1
         ;;
     esac
@@ -607,10 +610,14 @@ setup_helios_agent() {
     cp -a "$PI_AGENT_DIR" "$backup_dir"
     info "Backed up current agent to $backup_dir"
 
-    # Stash user files before extraction (delegates to lib/preserve-files.sh)
+    # Stash user files before extraction
     local tmp_stash
     tmp_stash="$(mktemp -d)"
-    stash_preserve_files "$PI_AGENT_DIR" "$tmp_stash"
+    for preserve in .env settings.json governance sessions .helios auth.json run-history.jsonl \
+                    mcp.json dep-allowlist.json .secrets state models.json pi-messenger.json \
+                    .update-state.json VERSION; do
+      [[ -e "$PI_AGENT_DIR/$preserve" ]] && cp -a "$PI_AGENT_DIR/$preserve" "$tmp_stash/"
+    done
 
     # Download and extract new tarball
     local tmp_tarball
@@ -645,8 +652,12 @@ setup_helios_agent() {
     fi
     rm -f "$tmp_tarball"
 
-    # Restore user files (delegates to lib/preserve-files.sh)
-    restore_preserve_files "$tmp_stash" "$PI_AGENT_DIR"
+    # Restore user files
+    for preserve in .env settings.json governance sessions .helios auth.json run-history.jsonl \
+                    mcp.json dep-allowlist.json .secrets state models.json pi-messenger.json \
+                    .update-state.json VERSION; do
+      [[ -e "$tmp_stash/$preserve" ]] && cp -a "$tmp_stash/$preserve" "$PI_AGENT_DIR/"
+    done
     rm -rf "$tmp_stash"
 
     success "Helios agent updated to $remote_version"
@@ -663,10 +674,14 @@ setup_helios_agent() {
   if [[ -d "$PI_AGENT_DIR/.git" ]]; then
     info "Detected git-based install — migrating to tarball distribution…"
 
-    # Stash user files (delegates to lib/preserve-files.sh)
+    # Stash user files
     local tmp_stash
     tmp_stash="$(mktemp -d)"
-    stash_preserve_files "$PI_AGENT_DIR" "$tmp_stash"
+    for preserve in .env settings.json governance sessions .helios auth.json run-history.jsonl \
+                    mcp.json dep-allowlist.json .secrets state models.json pi-messenger.json \
+                    .update-state.json VERSION; do
+      [[ -e "$PI_AGENT_DIR/$preserve" ]] && cp -a "$PI_AGENT_DIR/$preserve" "$tmp_stash/"
+    done
 
     # Backup the full git install
     local backup_dir="${PI_AGENT_DIR}.git-backup.$(date +%Y%m%d_%H%M%S)"
@@ -706,8 +721,12 @@ setup_helios_agent() {
     fi
     rm -f "$tmp_tarball"
 
-    # Restore user files (delegates to lib/preserve-files.sh)
-    restore_preserve_files "$tmp_stash" "$PI_AGENT_DIR"
+    # Restore user files
+    for preserve in .env settings.json governance sessions .helios auth.json run-history.jsonl \
+                    mcp.json dep-allowlist.json .secrets state models.json pi-messenger.json \
+                    .update-state.json VERSION; do
+      [[ -e "$tmp_stash/$preserve" ]] && cp -a "$tmp_stash/$preserve" "$PI_AGENT_DIR/"
+    done
     rm -rf "$tmp_stash"
 
     success "Migrated from git to tarball distribution ($(cat "$PI_AGENT_DIR/VERSION" 2>/dev/null || echo 'unknown'))"
@@ -982,29 +1001,48 @@ select_provider() {
     1)
       SELECTED_PROVIDER="anthropic"
       [[ -f "$INSTALLER_DIR/provider-configs/anthropic.json" ]] && \
-        cp "$INSTALLER_DIR/provider-configs/anthropic.json" "$PI_AGENT_DIR/settings.json"
+        _apply_provider_config "$INSTALLER_DIR/provider-configs/anthropic.json"
       success "Selected: Anthropic — run 'helios' and type /login to authenticate"
       ;;
     2)
       SELECTED_PROVIDER="amazon-bedrock"
       [[ -f "$INSTALLER_DIR/provider-configs/bedrock.json" ]] && \
-        cp "$INSTALLER_DIR/provider-configs/bedrock.json" "$PI_AGENT_DIR/settings.json"
+        _apply_provider_config "$INSTALLER_DIR/provider-configs/bedrock.json"
       success "Selected: Amazon Bedrock"
       _setup_bedrock_credentials
       ;;
     3)
       SELECTED_PROVIDER="openai"
       [[ -f "$INSTALLER_DIR/provider-configs/openai.json" ]] && \
-        cp "$INSTALLER_DIR/provider-configs/openai.json" "$PI_AGENT_DIR/settings.json"
+        _apply_provider_config "$INSTALLER_DIR/provider-configs/openai.json"
       success "Selected: OpenAI — run 'helios' and type /login to authenticate"
       ;;
     *)
       SELECTED_PROVIDER="anthropic"
       [[ -f "$INSTALLER_DIR/provider-configs/anthropic.json" ]] && \
-        cp "$INSTALLER_DIR/provider-configs/anthropic.json" "$PI_AGENT_DIR/settings.json"
+        _apply_provider_config "$INSTALLER_DIR/provider-configs/anthropic.json"
       success "Defaulting to Anthropic"
       ;;
   esac
+}
+
+# Apply provider config to settings.json using additive merge (preserves user customizations).
+# Falls back to direct copy if merge tools unavailable or settings.json is absent.
+_apply_provider_config() {
+  local provider_cfg="$1"
+  if [[ ! -f "$provider_cfg" ]]; then
+    return 0
+  fi
+  # If settings.json already exists, use additive merge via lib/json-merge.js so that
+  # user-customized keys (extensions, skills, packages) are not overwritten.
+  if [[ -f "$PI_AGENT_DIR/settings.json" ]] && command -v node &>/dev/null && \
+     [[ -f "$INSTALLER_DIR/lib/json-merge.js" ]]; then
+    node "$INSTALLER_DIR/lib/json-merge.js" \
+      "$PI_AGENT_DIR/settings.json" "$provider_cfg" 2>/dev/null || \
+      cp "$provider_cfg" "$PI_AGENT_DIR/settings.json"
+  else
+    cp "$provider_cfg" "$PI_AGENT_DIR/settings.json"
+  fi
 }
 
 # ─── Skill-Graph Dependencies ─────────────────────────────────────────────────
@@ -1274,11 +1312,20 @@ setup_memgraph() {
   fi
 
   # Check if a Memgraph container already exists (running or stopped)
+  # Priority: exact 'memgraph' → legacy 'familiar-graph-1' → compose label
   local mg_container=""
-  # resolve_memgraph_container returns 0 when a real container is found,
-  # 1 when it falls back to the default 'memgraph' name (no container present).
-  if ! mg_container=$(resolve_memgraph_container); then
-    mg_container=""  # No real container found — proceed to fresh install path
+  local _name
+  for name in memgraph familiar-graph-1; do
+    if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${name}$"; then
+      mg_container="$name"
+      break
+    fi
+  done
+  # Fallback: check compose label if direct names not found
+  if [[ -z "$mg_container" ]]; then
+    mg_container=$(docker ps -a --format '{{.Names}}\t{{.Labels}}' 2>/dev/null \
+      | grep "com.docker.compose.service=memgraph" \
+      | head -1 | cut -f1) || mg_container=""
   fi
 
   if [[ -n "$mg_container" ]]; then
@@ -1580,6 +1627,30 @@ wire_env_to_shell() {
     echo "$source_cmd" >> "$shell_profile"
     success "Added .env sourcing to $shell_profile"
   fi
+
+  # Source now for immediate use.
+  # L4 fix: use first-'='-only split so values containing '=' (e.g. base64
+  # API keys, URLs with query strings like https://host?a=b) are preserved
+  # verbatim.  Splitting on IFS-equals then re-reading is fragile for such values.
+  while IFS= read -r _env_line; do
+    # Strip leading whitespace and skip comments / blanks
+    _env_line="${_env_line#"${_env_line%%[! ]*}"}"
+    [[ -z "$_env_line" || "$_env_line" == \#* ]] && continue
+    # Split on FIRST '=' only using %%=* (key) and #*= (value)
+    _env_key="${_env_line%%=*}"
+    _env_val="${_env_line#*=}"
+    _env_key="${_env_key#export }"              # strip optional 'export ' prefix
+    _env_key="${_env_key#"${_env_key%%[! ]*}"}" # trim leading whitespace
+    _env_key="${_env_key%"${_env_key##*[! ]}"}" # trim trailing whitespace
+    _env_val="${_env_val#"${_env_val%%[! ]*}"}" # trim leading whitespace
+    _env_val="${_env_val%"${_env_val##*[! ]}"}" # trim trailing whitespace
+    _env_val="${_env_val#\"}" ; _env_val="${_env_val%\"}"  # strip double quotes
+    _env_val="${_env_val#\'}" ; _env_val="${_env_val%\'}"  # strip single quotes
+    [[ "$_env_key" =~ ^[A-Z_][A-Z_0-9]*$ ]] && [[ -n "$_env_val" ]] && export "$_env_key=$_env_val"
+  done < "$env_file"
+  success "API keys loaded into current session"
+
+  warn "Restart your terminal or run: source $shell_profile"
 }
 
 # ─── Pi Auth (OAuth browser login) ────────────────────────────────────────────
@@ -2124,10 +2195,13 @@ install_optional_deps() {
     if [[ "$(uname -s)" == "Darwin" ]] && command -v brew &>/dev/null; then
       brew install ffmpeg >> "$LOG_FILE" 2>&1 && success "ffmpeg installed" || warn "ffmpeg: install manually — brew install ffmpeg"
     elif command -v apt-get &>/dev/null; then
+      # shellcheck disable=SC2024
       sudo apt-get install -y ffmpeg >> "$LOG_FILE" 2>&1 && success "ffmpeg installed" || warn "ffmpeg: install manually"
     elif command -v dnf &>/dev/null; then
+      # shellcheck disable=SC2024
       sudo dnf install -y ffmpeg >> "$LOG_FILE" 2>&1 && success "ffmpeg installed" || warn "ffmpeg: install manually — sudo dnf install ffmpeg"
     elif command -v pacman &>/dev/null; then
+      # shellcheck disable=SC2024
       sudo pacman -S --noconfirm ffmpeg >> "$LOG_FILE" 2>&1 && success "ffmpeg installed" || warn "ffmpeg: install manually — sudo pacman -S ffmpeg"
     else
       warn "ffmpeg not found — install manually for video features"
@@ -2142,14 +2216,17 @@ install_optional_deps() {
     if [[ "$(uname -s)" == "Darwin" ]] && command -v brew &>/dev/null; then
       brew install yt-dlp >> "$LOG_FILE" 2>&1 && success "yt-dlp installed" || true
     elif command -v apt-get &>/dev/null; then
+      # shellcheck disable=SC2024
       sudo apt-get install -y yt-dlp >> "$LOG_FILE" 2>&1 && success "yt-dlp installed" || \
         { command -v pip3 &>/dev/null && pip3 install --user yt-dlp >> "$LOG_FILE" 2>&1 && success "yt-dlp installed (pip3)"; } || \
         warn "yt-dlp: install manually — pip3 install --user yt-dlp"
     elif command -v dnf &>/dev/null; then
+      # shellcheck disable=SC2024
       sudo dnf install -y yt-dlp >> "$LOG_FILE" 2>&1 && success "yt-dlp installed" || \
         { command -v pip3 &>/dev/null && pip3 install --user yt-dlp >> "$LOG_FILE" 2>&1 && success "yt-dlp installed (pip3)"; } || \
         warn "yt-dlp: install manually — pip3 install --user yt-dlp"
     elif command -v pacman &>/dev/null; then
+      # shellcheck disable=SC2024
       sudo pacman -S --noconfirm yt-dlp >> "$LOG_FILE" 2>&1 && success "yt-dlp installed" || \
         warn "yt-dlp: install manually — sudo pacman -S yt-dlp"
     elif command -v pipx &>/dev/null; then
