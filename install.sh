@@ -697,6 +697,13 @@ install_pi() {
     fi
   fi
 
+  # Migrate from @mariozechner/pi-coding-agent → @helios-agent/cli
+  if npm list -g @mariozechner/pi-coding-agent 2>/dev/null | grep -q "@mariozechner/pi-coding-agent"; then
+    info "Migrating from @mariozechner/pi-coding-agent → @helios-agent/cli..."
+    npm uninstall -g @mariozechner/pi-coding-agent >> "$LOG_FILE" 2>&1 || true
+    success "Removed old @mariozechner/pi-coding-agent"
+  fi
+
   if STEP_TIMEOUT="$NPM_INSTALL_TIMEOUT" run_with_spinner "Installing Helios CLI" \
       npm install -g @helios-agent/cli --fetch-timeout=240000; then
     PI_INSTALLED=true
@@ -752,6 +759,11 @@ update_pi_cli() {
   fi
 
   info "Updating Pi CLI: $current_ver → $latest_ver"
+  # Migrate from @mariozechner/pi-coding-agent if present (avoids EEXIST on 'pi' binary)
+  if npm list -g @mariozechner/pi-coding-agent 2>/dev/null | grep -q "@mariozechner/pi-coding-agent"; then
+    info "Removing old @mariozechner/pi-coding-agent..."
+    npm uninstall -g @mariozechner/pi-coding-agent >> "${LOG_FILE:-/dev/null}" 2>&1 || true
+  fi
   if run_with_spinner "Updating Pi CLI" \
       npm install -g @helios-agent/cli; then
     success "Pi CLI updated: $current_ver → $latest_ver"
