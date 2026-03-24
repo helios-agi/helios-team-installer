@@ -914,6 +914,138 @@ update_agent_dir() {
   fi
 }
 
+# ─── Update Snapshot ──────────────────────────────────────────────────────────
+snapshot_state() {
+  local snapshot_file="$PI_AGENT_DIR/.update-snapshot.json"
+  local pi_version agent_sha timestamp
+
+  pi_version=$(pi --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
+
+  if [[ -d "$PI_AGENT_DIR/.git" ]]; then
+    agent_sha=$(git -C "$PI_AGENT_DIR" rev-parse HEAD 2>/dev/null || echo "unknown")
+  else
+    agent_sha="unknown"
+  fi
+
+  timestamp=$(date +%s)
+
+  printf '{"pi_version":"%s","agent_sha":"%s","timestamp":%s}\n' \
+    "$pi_version" "$agent_sha" "$timestamp" > "$snapshot_file"
+
+  info "Snapshot saved: pi=$pi_version sha=${agent_sha:0:7} @ $timestamp"
+}
+
+# ─── Update Verification ──────────────────────────────────────────────────────
+verify_update() {
+  step "Update Verification"
+
+  local all_pass=true
+
+  # Check 1: pi --version responds and returns a version string
+  local pi_ver
+  if pi_ver=$(pi --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1) && [[ -n "$pi_ver" ]]; then
+    success "Pi CLI responds: $pi_ver"
+  else
+    error "Pi CLI check failed — cannot get version"
+    all_pass=false
+  fi
+
+  # Check 2: settings.json exists and is valid JSON
+  local settings_file="$PI_AGENT_DIR/settings.json"
+  if [[ -f "$settings_file" ]]; then
+    if python3 -c "import json; json.load(open('$settings_file'))" 2>/dev/null || \
+       node -e "JSON.parse(require('fs').readFileSync('$settings_file','utf8'))" 2>/dev/null; then
+      success "settings.json exists and is valid JSON"
+    else
+      error "settings.json exists but is not valid JSON"
+      all_pass=false
+    fi
+  else
+    error "settings.json not found at $settings_file"
+    all_pass=false
+  fi
+
+  # Check 3: extensions directory exists
+  if [[ -d "$PI_AGENT_DIR/extensions" ]]; then
+    success "Extensions directory exists"
+  else
+    error "Extensions directory not found at $PI_AGENT_DIR/extensions"
+    all_pass=false
+  fi
+
+  if [[ "$all_pass" == true ]]; then
+    success "All update checks passed"
+    return 0
+  else
+    warn "One or more update checks failed"
+    return 1
+  fi
+}
+
+# ─── Update Rollback ──────────────────────────────────────────────────────────
+rollback_update() {
+  step "Rolling Back Update"
+
+  local snapshot_file="$PI_AGENT_DIR/.update-snapshot.json"
+  if [[ ! -f "$snapshot_file" ]]; then
+    warn "No snapshot found at $snapshot_file — cannot roll back"
+    return 1
+  fi
+
+  local saved_pi_version saved_agent_sha
+  saved_pi_version=$(python3 -c "import json; print(json.load(open('$snapshot_file'))['pi_version'])" 2>/dev/null || \
+                     node -e "console.log(JSON.parse(require('fs').readFileSync('$snapshot_file','utf8')).pi_version)" 2>/dev/null || echo "")
+  saved_agent_sha=$(python3 -c "import json; print(json.load(open('$snapshot_file'))['agent_sha'])" 2>/dev/null || \
+                    node -e "console.log(JSON.parse(require('fs').readFileSync('$snapshot_file','utf8')).agent_sha)" 2>/dev/null || echo "")
+
+  if [[ -z "$saved_pi_version" ]] || [[ -z "$saved_agent_sha" ]]; then
+    error "Could not parse snapshot — manual rollback required"
+    return 1
+  fi
+
+  local rolled_back=false
+
+  # Roll back agent directory if SHA differs and it's a git repo
+  if [[ -d "$PI_AGENT_DIR/.git" ]] && [[ "$saved_agent_sha" != "unknown" ]]; then
+    local current_sha
+    current_sha=$(git -C "$PI_AGENT_DIR" rev-parse HEAD 2>/dev/null || echo "")
+    if [[ "$current_sha" != "$saved_agent_sha" ]]; then
+      info "Rolling back agent: ${current_sha:0:7} → ${saved_agent_sha:0:7}"
+      if git -C "$PI_AGENT_DIR" reset --hard "$saved_agent_sha" 2>/dev/null; then
+        success "Agent rolled back to ${saved_agent_sha:0:7}"
+        rolled_back=true
+      else
+        error "Agent rollback failed — manual fix: git -C $PI_AGENT_DIR reset --hard $saved_agent_sha"
+      fi
+    else
+      info "Agent SHA unchanged — no rollback needed"
+    fi
+  fi
+
+  # Roll back Pi CLI if version differs
+  if [[ "$saved_pi_version" != "unknown" ]]; then
+    local current_ver
+    current_ver=$(pi --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "")
+    if [[ "$current_ver" != "$saved_pi_version" ]]; then
+      info "Rolling back Pi CLI: $current_ver → $saved_pi_version"
+      if npm install -g "@mariozechner/pi-coding-agent@${saved_pi_version}" 2>/dev/null; then
+        success "Pi CLI rolled back to $saved_pi_version"
+        rolled_back=true
+      else
+        error "Pi CLI rollback failed — manual fix: npm install -g @mariozechner/pi-coding-agent@${saved_pi_version}"
+      fi
+    else
+      info "Pi CLI version unchanged — no rollback needed"
+    fi
+  fi
+
+  if [[ "$rolled_back" == true ]]; then
+    warn "Rollback complete — resolve update issues before retrying"
+  else
+    info "Nothing to roll back — state matches snapshot"
+  fi
+}
+
 # ─── Helios CLI Command ──────────────────────────────────────────────────────
 install_helios_cli() {
   step "Helios CLI (symlink)"
@@ -2632,6 +2764,7 @@ main() {
   fi
 
   if [[ "$UPDATE_MODE" == true ]]; then
+    snapshot_state
     run_step "Pi CLI"             update_pi_cli
     run_step "Agent Directory"    update_agent_dir
   fi
@@ -2640,6 +2773,13 @@ main() {
   run_step "Skill Dependencies" install_skill_deps
   run_step "Helios Browse"      setup_helios_browse
   run_step "Governance Deps"    install_governance_deps
+
+  if [[ "$UPDATE_MODE" == true ]]; then
+    if ! verify_update; then
+      warn "Update verification failed — initiating rollback..."
+      rollback_update
+    fi
+  fi
 
   if [[ "${FULL_UPDATE:-false}" == true ]]; then
     run_step "Memgraph"          setup_memgraph
