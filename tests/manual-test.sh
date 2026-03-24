@@ -13,7 +13,8 @@ echo ""
 
 # Test 1: helios status
 echo "▶ helios status"
-helios status 2>&1 | grep -q "Pi CLI" && ok "helios status shows Pi CLI" || fail "helios status broken"
+STATUS_OUT=$(helios status 2>/dev/null || true)
+echo "$STATUS_OUT" | grep -q "Pi CLI" && ok "helios status shows Pi CLI" || fail "helios status broken"
 
 # Test 2: helios version
 echo "▶ helios version"
