@@ -186,6 +186,30 @@ _timeout_cmd() {
   fi
 }
 
+# ─── Retry with Exponential Backoff ──────────────────────────────────────────
+# Usage: retry_with_backoff [max_attempts] [initial_delay_seconds] <command> [args...]
+# Defaults: 3 attempts, 2s initial delay (doubles each retry)
+retry_with_backoff() {
+  local max_attempts="${1:-3}"
+  local delay="${2:-2}"
+  shift 2
+  local cmd=("$@")
+  local attempt=1
+  while (( attempt <= max_attempts )); do
+    if "${cmd[@]}"; then
+      return 0
+    fi
+    if (( attempt < max_attempts )); then
+      warn "Attempt $attempt/$max_attempts failed. Retrying in ${delay}s..."
+      sleep "$delay"
+      delay=$(( delay * 2 ))
+    fi
+    (( attempt++ ))
+  done
+  error "Failed after $max_attempts attempts: ${cmd[*]}"
+  return 1
+}
+
 # ─── Progress Spinner ─────────────────────────────────────────────────────────
 spin_pid=""
 start_spinner() {
@@ -413,7 +437,7 @@ check_prerequisites() {
     success "pnpm $(pnpm -v 2>/dev/null)"
   else
     info "Installing pnpm..."
-    npm install -g pnpm >> "$LOG_FILE" 2>&1 && success "pnpm installed" || warn "pnpm install failed — not critical"
+    retry_with_backoff 3 2 npm install -g pnpm >> "$LOG_FILE" 2>&1 && success "pnpm installed" || warn "pnpm install failed — not critical"
   fi
 
   # ── Docker / OrbStack ───────────────────────────────────────────────────────
@@ -428,7 +452,7 @@ check_prerequisites() {
     case "$platform" in
       macos)
         info "Installing OrbStack (lightweight Docker for macOS)..."
-        brew install --cask orbstack >> "$LOG_FILE" 2>&1 && {
+        retry_with_backoff 3 5 brew install --cask orbstack >> "$LOG_FILE" 2>&1 && {
           success "OrbStack installed — launch it to start Docker"
         } || warn "OrbStack install failed — install manually: https://orbstack.dev"
         ;;
@@ -436,7 +460,7 @@ check_prerequisites() {
         info "Installing Docker CE..."
         if command -v curl &>/dev/null; then
           info "This will run the Docker install script with sudo permissions"
-          curl -fsSL https://get.docker.com 2>/dev/null | sh >> "$LOG_FILE" 2>&1 && {
+          retry_with_backoff 3 5 bash -c "curl -fsSL https://get.docker.com | sh" >> "$LOG_FILE" 2>&1 && {
             sudo usermod -aG docker "$USER" 2>/dev/null || true
             success "Docker CE installed"
           } || warn "Docker install failed — install manually: https://docs.docker.com/engine/install/"
@@ -1381,6 +1405,32 @@ setup_memgraph() {
       < "$schema" >> "$LOG_FILE" 2>&1 && info "Graph schema applied" || true
   fi
 
+  # Verify Memgraph Bolt connectivity (TASK-04: capture result, retry, show logs on failure)
+  if [[ -n "$mg_running" ]]; then
+    local bolt_ok=false
+    local bolt_attempt
+    for bolt_attempt in 1 2 3; do
+      if echo "RETURN 1 AS alive;" | docker exec -i "$mg_running" mgconsole \
+           --username "${MEMGRAPH_USER:-memgraph}" --password "${MEMGRAPH_PASS:-memgraph}" \
+           --output-format csv >> "$LOG_FILE" 2>&1; then
+        bolt_ok=true
+        break
+      fi
+      if (( bolt_attempt < 3 )); then
+        warn "Memgraph Bolt check failed (attempt $bolt_attempt/3) — retrying in 5s..."
+        sleep 5
+      fi
+    done
+    if [[ "$bolt_ok" == true ]]; then
+      success "Memgraph Bolt connection verified"
+    else
+      warn "Memgraph Bolt verification failed after 3 attempts"
+      info "Container logs:"
+      docker logs --tail 20 "$mg_running" 2>&1 | sed 's/^/  /' || true
+      INSTALL_WARNINGS+=("Memgraph Bolt check failed — check container logs: docker logs $mg_running")
+    fi
+  fi
+
   # Persist the resolved runtime contract
   persist_runtime_contract "$mg_running"
 }
@@ -1434,7 +1484,7 @@ setup_ollama() {
       success "$model model ready"
     else
       run_with_spinner "Pulling $model (this may take a few minutes)" \
-        ollama pull "$model" || warn "Failed to pull $model"
+        retry_with_backoff 3 10 ollama pull "$model" || warn "Failed to pull $model"
     fi
   done
 }
@@ -1790,7 +1840,7 @@ setup_familiar() {
     fi
   fi
 
-  if ! git clone --single-branch --depth 1 "https://$FAMILIAR_REPO.git" "$FAMILIAR_DIR" 2>&1; then
+  if ! retry_with_backoff 3 5 git clone --single-branch --depth 1 "https://$FAMILIAR_REPO.git" "$FAMILIAR_DIR" 2>&1; then
     warn "Could not clone Familiar (repository may require authentication)"
     info "To install Familiar later: gh auth login && git clone https://$FAMILIAR_REPO.git ~/.familiar"
     info "Familiar enables Gmail, Calendar, and Drive skills — it's optional."
