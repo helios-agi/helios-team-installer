@@ -589,6 +589,44 @@ install_pi() {
   fi
 }
 
+# ─── Pi CLI Update ────────────────────────────────────────────────────────────
+update_pi_cli() {
+  step "Pi CLI"
+
+  if ! command -v pi &>/dev/null; then
+    warn "Pi CLI not found — installing..."
+    install_pi
+    return
+  fi
+
+  local current_ver latest_ver
+  current_ver=$(pi --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
+  latest_ver=$(npm view @mariozechner/pi-coding-agent version --fetch-timeout=10000 2>/dev/null || echo "")
+
+  if [[ -z "$latest_ver" ]]; then
+    warn "Could not fetch latest Pi CLI version — skipping"
+    return 0
+  fi
+
+  # Strip leading 'v' for comparison
+  local current_clean latest_clean
+  current_clean="${current_ver#v}"
+  latest_clean="${latest_ver#v}"
+
+  if [[ "$current_clean" == "$latest_clean" ]]; then
+    success "Pi CLI up to date ($current_ver)"
+    return 0
+  fi
+
+  info "Updating Pi CLI: $current_ver → $latest_ver"
+  if run_with_spinner "Updating Pi CLI" \
+      npm install -g @mariozechner/pi-coding-agent; then
+    success "Pi CLI updated: $current_ver → $latest_ver"
+  else
+    warn "Pi CLI update failed — continuing with $current_ver"
+  fi
+}
+
 # ─── Helios Agent (Tarball) ───────────────────────────────────────────────────
 setup_helios_agent() {
   step "Helios Agent (~/.pi/agent/)"
@@ -817,6 +855,57 @@ setup_helios_agent() {
   if [[ ! -f "$PI_AGENT_DIR/VERSION" ]]; then
     echo "tarball-$(date +%Y%m%d)" > "$PI_AGENT_DIR/VERSION"
     warn "VERSION file missing from tarball — created placeholder"
+  fi
+}
+
+# ─── Agent Directory Update (git-based) ──────────────────────────────────────
+update_agent_dir() {
+  step "Agent Directory"
+
+  if [[ ! -d "$PI_AGENT_DIR/.git" ]]; then
+    info "Agent directory is not a git repo — skipping git update"
+    return 0
+  fi
+
+  # Fetch latest from origin/main
+  if ! git -C "$PI_AGENT_DIR" fetch origin main --quiet 2>/dev/null; then
+    warn "Could not fetch from origin/main — skipping agent update"
+    return 0
+  fi
+
+  local behind
+  behind=$(git -C "$PI_AGENT_DIR" rev-list HEAD..origin/main --count 2>/dev/null || echo "0")
+
+  if [[ "$behind" == "0" ]]; then
+    success "Agent up to date"
+    return 0
+  fi
+
+  info "Agent is $behind commit(s) behind — updating..."
+
+  # Stash if dirty
+  local stashed=false
+  if ! git -C "$PI_AGENT_DIR" diff --quiet 2>/dev/null || \
+     ! git -C "$PI_AGENT_DIR" diff --cached --quiet 2>/dev/null; then
+    info "Stashing local changes..."
+    if git -C "$PI_AGENT_DIR" stash push -m "helios-update-stash-$(date +%s)" 2>/dev/null; then
+      stashed=true
+    else
+      warn "Could not stash local changes — proceeding without stash"
+    fi
+  fi
+
+  if git -C "$PI_AGENT_DIR" pull --ff-only origin main --quiet 2>/dev/null; then
+    success "Agent updated ($behind commit(s) pulled)"
+    if [[ "$stashed" == true ]]; then
+      git -C "$PI_AGENT_DIR" stash pop --quiet 2>/dev/null || \
+        warn "Could not restore stash — check $PI_AGENT_DIR manually"
+    fi
+  else
+    warn "Agent pull failed — run 'git -C $PI_AGENT_DIR pull' manually"
+    if [[ "$stashed" == true ]]; then
+      git -C "$PI_AGENT_DIR" stash pop --quiet 2>/dev/null || true
+    fi
   fi
 }
 
@@ -2476,9 +2565,9 @@ main() {
   detect_update_mode "$@"
 
   # Set TOTAL_STEPS accurately for this run (error-recovery.sh defaults to 0)
-  # Full install: 13 run_step calls. Update mode: 3 run_step calls.
+  # Full install: 13 run_step calls. Update mode: 6 run_step calls.
   if [[ "$UPDATE_MODE" == true ]]; then
-    TOTAL_STEPS=3
+    TOTAL_STEPS=6
     CURRENT_STEP=0
   else
     TOTAL_STEPS=13
@@ -2522,6 +2611,11 @@ main() {
   if ! command -v helios &>/dev/null; then
     warn "Helios CLI not found — installing..."
     install_pi
+  fi
+
+  if [[ "$UPDATE_MODE" == true ]]; then
+    run_step "Pi CLI"             update_pi_cli
+    run_step "Agent Directory"    update_agent_dir
   fi
 
   run_step "Helios Packages"       install_packages
