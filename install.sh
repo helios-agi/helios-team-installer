@@ -10,6 +10,16 @@ INSTALLER_VERSION="2.1.0"
 set -euo pipefail
 INSTALL_WARNINGS=()
 
+# ─── Update Recursion Guard ───────────────────────────────────────────────────
+# Prevents install.sh from calling itself recursively (e.g., helios update →
+# install.sh → install_packages → helios update → install.sh).
+if [[ "${_HELIOS_INSTALLER_RUNNING:-}" == "true" ]]; then
+  echo "ERROR: Installer recursion detected — aborting re-entrant call." >&2
+  echo "  The installer is already running in a parent process." >&2
+  exit 0
+fi
+export _HELIOS_INSTALLER_RUNNING=true
+
 # ─── Source error recovery library ────────────────────────────────────────────
 INSTALLER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "$INSTALLER_DIR/lib/error-recovery.sh" ]]; then
@@ -300,6 +310,124 @@ _verify_sha256() {
   return 0
 }
 
+# ─── Settings.json Schema Validation ──────────────────────────────────────────
+# Validates that settings.json has all required fields and is well-formed.
+validate_settings() {
+  local settings_file="${1:-$PI_AGENT_DIR/settings.json}"
+  
+  if [[ ! -f "$settings_file" ]]; then
+    warn "settings.json not found at $settings_file"
+    return 1
+  fi
+
+  # Validate JSON syntax and required fields
+  local validation_result=""
+  if command -v node &>/dev/null; then
+    validation_result=$(node -e "
+      const fs = require('fs');
+      const f = process.argv[1];
+      try {
+        const data = JSON.parse(fs.readFileSync(f, 'utf8'));
+        const required = ['defaultProvider'];
+        const recommended = ['defaultModel', 'customInstructions'];
+        const missing = required.filter(k => !data[k]);
+        const missingRec = recommended.filter(k => !data[k]);
+        if (missing.length > 0) {
+          console.log('FAIL:missing_required:' + missing.join(','));
+          process.exit(1);
+        }
+        if (typeof data.defaultProvider !== 'string' || data.defaultProvider.trim() === '') {
+          console.log('FAIL:empty_provider');
+          process.exit(1);
+        }
+        const validProviders = ['anthropic', 'amazon-bedrock', 'openai', 'google', 'openrouter'];
+        if (!validProviders.includes(data.defaultProvider)) {
+          console.log('WARN:unknown_provider:' + data.defaultProvider);
+        }
+        if (missingRec.length > 0) {
+          console.log('WARN:missing_recommended:' + missingRec.join(','));
+        } else {
+          console.log('OK');
+        }
+      } catch (e) {
+        console.log('FAIL:invalid_json:' + e.message);
+        process.exit(1);
+      }
+    " "$settings_file" 2>/dev/null)
+  elif command -v python3 &>/dev/null; then
+    validation_result=$(python3 -c "
+import json, sys
+f = sys.argv[1]
+try:
+    with open(f) as fh:
+        data = json.load(fh)
+    required = ['defaultProvider']
+    missing = [k for k in required if k not in data]
+    if missing:
+        print('FAIL:missing_required:' + ','.join(missing))
+        sys.exit(1)
+    if not isinstance(data.get('defaultProvider'), str) or not data['defaultProvider'].strip():
+        print('FAIL:empty_provider')
+        sys.exit(1)
+    valid = ['anthropic', 'amazon-bedrock', 'openai', 'google', 'openrouter']
+    if data['defaultProvider'] not in valid:
+        print('WARN:unknown_provider:' + data['defaultProvider'])
+    else:
+        print('OK')
+except json.JSONDecodeError as e:
+    print('FAIL:invalid_json:' + str(e))
+    sys.exit(1)
+" "$settings_file" 2>/dev/null)
+  else
+    warn "Neither node nor python3 available — skipping settings validation"
+    return 0
+  fi
+
+  case "$validation_result" in
+    OK)
+      success "settings.json valid"
+      return 0
+      ;;
+    WARN:unknown_provider:*)
+      local unknown_prov="${validation_result#WARN:unknown_provider:}"
+      warn "settings.json: unrecognized provider '$unknown_prov' (may still work)"
+      return 0
+      ;;
+    WARN:missing_recommended:*)
+      local missing_rec="${validation_result#WARN:missing_recommended:}"
+      info "settings.json: recommended fields missing: $missing_rec"
+      return 0
+      ;;
+    FAIL:missing_required:*)
+      local missing_req="${validation_result#FAIL:missing_required:}"
+      error "settings.json: missing required fields: $missing_req"
+      return 1
+      ;;
+    FAIL:empty_provider)
+      error "settings.json: defaultProvider is empty"
+      return 1
+      ;;
+    FAIL:invalid_json:*)
+      local json_err="${validation_result#FAIL:invalid_json:}"
+      error "settings.json: invalid JSON — $json_err"
+      return 1
+      ;;
+    *)
+      error "settings.json validation failed"
+      return 1
+      ;;
+  esac
+}
+
+# ─── Per-Component Timeout Configuration ──────────────────────────────────────
+# Each major install step has its own timeout (seconds). Override via env vars.
+DOCKER_INSTALL_TIMEOUT="${DOCKER_INSTALL_TIMEOUT:-600}"
+MEMGRAPH_TIMEOUT="${MEMGRAPH_TIMEOUT:-300}"
+OLLAMA_TIMEOUT="${OLLAMA_TIMEOUT:-300}"
+NODE_INSTALL_TIMEOUT="${NODE_INSTALL_TIMEOUT:-300}"
+NPM_INSTALL_TIMEOUT="${NPM_INSTALL_TIMEOUT:-300}"
+PACKAGE_SYNC_TIMEOUT="${PACKAGE_SYNC_TIMEOUT:-600}"
+
 check_prerequisites() {
   step "Prerequisites (auto-installing missing dependencies)"
 
@@ -383,7 +511,7 @@ check_prerequisites() {
     info "Installing Node.js..."
     # Delegates to lib/platform.sh's _install_nodejs() which handles
     # apt/dnf/pacman/zypper on Linux/WSL and brew on macOS.
-    _install_nodejs
+    _timeout_cmd "$NODE_INSTALL_TIMEOUT" bash -c '_install_nodejs' 2>/dev/null || _install_nodejs
     if command -v node &>/dev/null && node -e "process.exit(parseInt(process.version.slice(1)) < 18 ? 1 : 0)" 2>/dev/null; then
       success "Node.js $(node -v) installed"
     else
@@ -457,7 +585,7 @@ check_prerequisites() {
     case "$platform" in
       macos)
         info "Installing OrbStack (lightweight Docker for macOS)..."
-        retry_with_backoff 3 5 brew install --cask orbstack >> "$LOG_FILE" 2>&1 && {
+        _timeout_cmd "$DOCKER_INSTALL_TIMEOUT" retry_with_backoff 3 5 brew install --cask orbstack >> "$LOG_FILE" 2>&1 && {
           success "OrbStack installed — launch it to start Docker"
         } || warn "OrbStack install failed — install manually: https://orbstack.dev"
         ;;
@@ -465,7 +593,7 @@ check_prerequisites() {
         info "Installing Docker CE..."
         if command -v curl &>/dev/null; then
           info "This will run the Docker install script with sudo permissions"
-          retry_with_backoff 3 5 bash -c "curl -fsSL https://get.docker.com | sh" >> "$LOG_FILE" 2>&1 && {
+          _timeout_cmd "$DOCKER_INSTALL_TIMEOUT" retry_with_backoff 3 5 bash -c "curl -fsSL https://get.docker.com | sh" >> "$LOG_FILE" 2>&1 && {
             sudo usermod -aG docker "$USER" 2>/dev/null || true
             success "Docker CE installed"
           } || warn "Docker install failed — install manually: https://docs.docker.com/engine/install/"
@@ -569,7 +697,7 @@ install_pi() {
     fi
   fi
 
-  if run_with_spinner "Installing Helios CLI" \
+  if STEP_TIMEOUT="$NPM_INSTALL_TIMEOUT" run_with_spinner "Installing Helios CLI" \
       npm install -g @helios-agent/cli --fetch-timeout=240000; then
     PI_INSTALLED=true
     success "Helios installed: $(helios --version 2>/dev/null | tail -1 || echo 'ok')"
@@ -579,7 +707,7 @@ install_pi() {
     chown -R "$(whoami)" "$HOME/.npm" >> "$LOG_FILE" 2>&1 || true
     npm cache clean --force >> "$LOG_FILE" 2>&1 || true
     
-    if run_with_spinner "Retrying Helios CLI install" \
+    if STEP_TIMEOUT="$NPM_INSTALL_TIMEOUT" run_with_spinner "Retrying Helios CLI install" \
         npm install -g @helios-agent/cli --fetch-timeout=240000; then
       PI_INSTALLED=true
       success "Helios installed on retry: $(helios --version 2>/dev/null | tail -1 || echo 'ok')"
@@ -950,14 +1078,13 @@ verify_update() {
     all_pass=false
   fi
 
-  # Check 2: settings.json exists and is valid JSON
+  # Check 2: settings.json exists, is valid JSON, and has required fields
   local settings_file="$PI_AGENT_DIR/settings.json"
   if [[ -f "$settings_file" ]]; then
-    if python3 -c "import json; json.load(open('$settings_file'))" 2>/dev/null || \
-       node -e "JSON.parse(require('fs').readFileSync('$settings_file','utf8'))" 2>/dev/null; then
-      success "settings.json exists and is valid JSON"
+    if validate_settings "$settings_file"; then
+      : # validate_settings prints its own success/warn messages
     else
-      error "settings.json exists but is not valid JSON"
+      error "settings.json validation failed"
       all_pass=false
     fi
   else
@@ -1154,7 +1281,7 @@ install_packages() {
     cli_cmd=(npx @helios-agent/cli)
   fi
 
-  run_with_spinner "Running package sync" "${cli_cmd[@]}" update || {
+  STEP_TIMEOUT="$PACKAGE_SYNC_TIMEOUT" run_with_spinner "Running package sync" "${cli_cmd[@]}" update || {
     if [[ "$bundled_count" -ge 15 ]]; then
       warn "helios update had issues, but bundled packages are available"
     else
@@ -1617,7 +1744,7 @@ setup_memgraph() {
           return 0
         fi
       fi
-      run_with_spinner "Starting Memgraph (first time — downloading image)" \
+      STEP_TIMEOUT="$MEMGRAPH_TIMEOUT" run_with_spinner "Starting Memgraph (first time — downloading image)" \
         bash -c "cd '$PI_AGENT_DIR/proxies/memgraph' && $compose_cmd up -d" || {
         warn "Memgraph failed to start — you can set it up later"
         return 0
@@ -1712,12 +1839,20 @@ setup_ollama() {
 
   # Pull required embedding models
   # nomic-embed-text is primary (274MB, native 768d), granite-embedding is fallback (62MB)
+  local OLLAMA_PULL_TIMEOUT="${OLLAMA_PULL_TIMEOUT:-300}"
   for model in nomic-embed-text granite-embedding; do
     if ollama list 2>/dev/null | awk '{print $1}' | grep -q "^${model}:"; then
       success "$model model ready"
     else
       run_with_spinner "Pulling $model (this may take a few minutes)" \
-        retry_with_backoff 3 10 ollama pull "$model" || warn "Failed to pull $model"
+        _timeout_cmd "$OLLAMA_PULL_TIMEOUT" retry_with_backoff 3 10 ollama pull "$model" || {
+        if [[ $? -eq 124 ]]; then
+          warn "Ollama pull of $model timed out after ${OLLAMA_PULL_TIMEOUT}s"
+        else
+          warn "Failed to pull $model"
+        fi
+        info "Retry manually: ollama pull $model"
+      }
     fi
   done
 }
@@ -2226,12 +2361,13 @@ run_verification() {
     info ".env not found — service keys are optional (AI auth handled by Helios)"
   fi
 
-  # settings.json
+  # settings.json — full schema validation
   if [[ -f "$PI_AGENT_DIR/settings.json" ]]; then
     local configured_provider
     configured_provider=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('defaultProvider','?'))" "$PI_AGENT_DIR/settings.json" 2>/dev/null || \
       node -e "console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).defaultProvider||'?')" -- "$PI_AGENT_DIR/settings.json" 2>/dev/null || echo "?")
     success "settings.json: provider=$configured_provider"
+    validate_settings "$PI_AGENT_DIR/settings.json" || all_ok=false
   fi
 
   echo ""
