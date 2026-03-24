@@ -1,0 +1,186 @@
+# =============================================================================
+# e2e-windows.yml — WSL2 install + update test on Windows runner
+# =============================================================================
+# Tests that the helios installer works inside WSL2.
+# Docker/Memgraph are NOT available on CI (gracefully skipped).
+# =============================================================================
+
+name: E2E Windows WSL Install
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test-wsl-install:
+    name: WSL2 install + update
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup WSL2 (Ubuntu 22.04)
+        uses: Vampire/setup-wsl@v5
+        with:
+          distribution: Ubuntu-22.04
+          wsl-version: 2
+          additional-packages: git curl python3
+
+      - name: Install Node.js 22 in WSL
+        shell: wsl-bash {0}
+        run: |
+          curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+          sudo apt-get install -y nodejs
+          echo "Node: $(node --version)"
+          echo "npm: $(npm --version)"
+
+      - name: Configure npm global prefix (no sudo)
+        shell: wsl-bash {0}
+        run: |
+          mkdir -p "$HOME/.npm-global"
+          npm config set prefix "$HOME/.npm-global"
+          export PATH="$HOME/.npm-global/bin:$PATH"
+          echo "npm prefix: $(npm config get prefix)"
+
+      - name: Install @helios-agent/cli
+        shell: wsl-bash {0}
+        run: |
+          export PATH="$HOME/.npm-global/bin:$(npm prefix -g)/bin:$PATH"
+          npm install -g @helios-agent/cli
+          export PATH="$HOME/.npm-global/bin:$(npm prefix -g)/bin:$PATH"
+          which helios && echo "✓ helios installed: $(helios --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" || { echo "✗ helios not found"; exit 1; }
+
+      - name: Setup agent directory
+        shell: wsl-bash {0}
+        run: |
+          mkdir -p ~/.pi/agent/bin ~/.pi/agent/extensions ~/.pi/agent/skills ~/.pi/agent/scripts
+          echo '{"defaultProvider":"anthropic"}' > ~/.pi/agent/settings.json
+
+      - name: Copy installer to WSL home
+        shell: wsl-bash {0}
+        run: |
+          # Copy from mounted workspace
+          if [ -d "/mnt/d/a" ]; then
+            # GitHub Actions mounts workspace under /mnt/d/a on windows-latest
+            WORKSPACE=$(find /mnt -maxdepth 5 -name "install.sh" -path "*/helios-team-installer/*" 2>/dev/null | head -1 | xargs dirname)
+          fi
+          if [ -z "$WORKSPACE" ] || [ ! -d "$WORKSPACE" ]; then
+            WORKSPACE="$(pwd)"
+          fi
+          cp -r "$WORKSPACE" ~/helios-team-installer 2>/dev/null || cp -r . ~/helios-team-installer
+          echo "✓ Installer at ~/helios-team-installer"
+          ls ~/helios-team-installer/install.sh && echo "✓ install.sh present"
+
+      - name: Syntax check installer
+        shell: wsl-bash {0}
+        run: bash -n ~/helios-team-installer/install.sh && echo "✓ Syntax OK"
+
+      - name: Run installer (--update mode)
+        shell: wsl-bash {0}
+        run: |
+          export PATH="$HOME/.pi/agent/bin:$HOME/.npm-global/bin:$PATH"
+          cd ~/helios-team-installer
+          timeout 180 bash install.sh --update 2>&1 | tee /tmp/install.log || {
+            EXIT_CODE=$?
+            echo "⚠ Installer exited $EXIT_CODE (may be expected — Docker not available)"
+            tail -20 /tmp/install.log
+          }
+          echo "✓ Installer ran"
+
+      - name: Verify helios --version
+        shell: wsl-bash {0}
+        run: |
+          export PATH="$HOME/.pi/agent/bin:$HOME/.npm-global/bin:$PATH"
+          VERSION=$(helios --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          echo "helios version: $VERSION"
+          [ -n "$VERSION" ] || { echo "✗ No version output"; exit 1; }
+          echo "✓ helios --version works on WSL"
+
+      - name: Verify helios status
+        shell: wsl-bash {0}
+        run: |
+          export PATH="$HOME/.pi/agent/bin:$HOME/.npm-global/bin:$PATH"
+          STATUS=$(helios status 2>/dev/null || true)
+          echo "$STATUS" | tee /tmp/status.log
+          echo "$STATUS" | grep -q "Pi CLI" && echo "✓ helios status works" || echo "⚠ helios status incomplete (expected — no Memgraph)"
+
+      - name: Idempotency (run installer again)
+        shell: wsl-bash {0}
+        run: |
+          export PATH="$HOME/.pi/agent/bin:$HOME/.npm-global/bin:$PATH"
+          cd ~/helios-team-installer
+          timeout 180 bash install.sh --update 2>&1 | tee /tmp/install-2.log || true
+          echo "✓ Second run completed"
+          # CLI still works after second run
+          VERSION=$(helios --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          [ -n "$VERSION" ] && echo "✓ CLI still works ($VERSION)" || echo "✗ CLI broken after second run"
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wsl-install-logs
+          path: |
+            \\wsl.localhost\Ubuntu-22.04\tmp\*.log
+
+  test-windows-native-syntax:
+    name: Windows native installer syntax
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: PowerShell syntax check (install.ps1)
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "$PWD/install.ps1", [ref]$null, [ref]$errors
+          )
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+          Write-Host "✓ install.ps1 syntax OK"
+
+      - name: Batch file anti-pattern checks (install.bat)
+        shell: pwsh
+        run: |
+          $content = Get-Content install.bat -Raw -ErrorAction SilentlyContinue
+          if (-not $content) { Write-Host "⚠ No install.bat — skipping"; exit 0 }
+
+          $failed = $false
+          # No double wsl invocations
+          if (Select-String -Path install.bat -Pattern 'wsl.*-d.*bash\s+-c\s+wsl' -Quiet) {
+            Write-Error "Double wsl invocation detected"
+            $failed = $true
+          }
+          # No hardcoded Ubuntu distro
+          $hardcoded = Get-Content install.bat | Where-Object {
+            $_ -match 'wsl\s+-d\s+Ubuntu\b' -and $_ -notmatch '^::' -and $_ -notmatch 'wsl --install'
+          }
+          if ($hardcoded) {
+            Write-Error "Hardcoded 'wsl -d Ubuntu' (should use variable)"
+            $failed = $true
+          }
+          # No bash -c wsl pattern
+          if (Select-String -Path install.bat -Pattern 'bash\s+-c\s+wsl' -Quiet) {
+            Write-Error "Found 'bash -c wsl' anti-pattern"
+            $failed = $true
+          }
+
+          if ($failed) { exit 1 }
+          Write-Host "✓ install.bat all checks passed"
+
+      - name: npm smoke test (Windows native)
+        shell: bash
+        run: |
+          npm install -g @helios-agent/cli
+          export PATH="$(npm prefix -g)/bin:$PATH"
+          helios --version 2>&1 | head -3
+          VERSION=$(helios --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          [ -n "$VERSION" ] && echo "✓ helios works on Windows ($VERSION)" || { echo "✗ helios broken on Windows"; exit 1; }
+

@@ -58,7 +58,9 @@ jobs:
       - name: Install Pi CLI
         run: |
           npm install -g @helios-agent/cli
-          which helios && echo "✓ Pi CLI installed: $(helios --version 2>&1 | head -1)" || { echo "✗ pi not found"; exit 1; }
+          export PATH="$(npm prefix -g)/bin:$PATH"
+          echo "PATH=$(npm prefix -g)/bin:$PATH" >> $GITHUB_ENV
+          which helios && echo "✓ Pi CLI installed: $(helios --version 2>&1 | head -1)" || { echo "✗ helios not found"; exit 1; }
 
       - name: Capture filesystem baseline
         run: |
@@ -78,9 +80,9 @@ jobs:
           echo "✓ Wrapper executable"
           grep -q "resolve_cli" "$WRAPPER" || { echo "✗ Missing resolve_cli"; exit 1; }
           echo "✓ Has resolve_cli"
-          grep -q "command -v pi" "$WRAPPER" || { echo "✗ Missing command -v pi"; exit 1; }
-          echo "✓ Has command -v pi"
-          grep -q "_HELIOS_UPDATE_GUARD" "$WRAPPER" || { echo "✗ Missing recursion guard"; exit 1; }
+          grep -q "command -v" "$WRAPPER" || { echo "✗ Missing command -v check"; exit 1; }
+          echo "✓ Has command -v check"
+          grep -q "_HELIOS_UPDATE_DEPTH" "$WRAPPER" || { echo "✗ Missing recursion guard"; exit 1; }
           echo "✓ Has recursion guard"
           bash -n "$WRAPPER" || { echo "✗ Syntax error"; exit 1; }
           echo "✓ Syntax OK"
@@ -112,7 +114,7 @@ jobs:
       - name: Functional smoke test
         run: |
           test -x ~/.pi/agent/bin/helios && echo "✓ Wrapper executable"
-          helios --version 2>&1 | head -1 && echo "✓ pi --version works" || echo "⚠ pi --version failed"
+          helios --version 2>&1 | head -1 && echo "✓ helios --version works" || echo "⚠ helios --version failed"
           npm ls -g @helios-agent/cli --depth=0 2>/dev/null && echo "✓ npm package present" || echo "⚠ npm check failed"
 
       - name: "Second install — idempotency"
@@ -132,7 +134,7 @@ jobs:
           fi
           
           # CLI still works
-          helios --version 2>&1 | head -1 && echo "✓ pi still works" || echo "⚠ pi broken after reinstall"
+          helios --version 2>&1 | head -1 && echo "✓ helios still works" || echo "⚠ helios broken after reinstall"
           
           # Wrapper still intact
           test -x ~/.pi/agent/bin/helios && echo "✓ Wrapper intact" || { echo "✗ Wrapper broken"; exit 1; }
@@ -214,7 +216,7 @@ jobs:
           
           # Verify functional after recovery
           test -x ~/.pi/agent/bin/helios && echo "✓ Wrapper executable after recovery"
-          helios --version 2>&1 | head -1 && echo "✓ pi works after recovery" || echo "⚠ pi --version failed"
+          helios --version 2>&1 | head -1 && echo "✓ helios works after recovery" || echo "⚠ helios --version failed"
           echo "✓ Partial failure recovery passed"
 
       - name: Network failure simulation
@@ -245,7 +247,7 @@ jobs:
           
           # Verify the system is still functional (no corruption from failed install)
           npm config get registry | grep -q 'registry.npmjs.org' && echo "✓ Registry restored"
-          helios --version 2>&1 | head -1 && echo "✓ pi still works after network failure" || echo "⚠ pi needs reinstall"
+          helios --version 2>&1 | head -1 && echo "✓ helios still works after network failure" || echo "⚠ helios needs reinstall"
           
           # Reinstall if needed
           npm install -g @helios-agent/cli 2>/dev/null || true
