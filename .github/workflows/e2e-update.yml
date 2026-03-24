@@ -21,6 +21,8 @@ jobs:
       - name: Install old @helios-agent/cli
         run: |
           npm install -g @helios-agent/cli@0.60.0 2>/dev/null || npm install -g @helios-agent/cli
+          export PATH="$(npm prefix -g)/bin:$PATH"
+          echo "PATH=$(npm prefix -g)/bin:$PATH" >> $GITHUB_ENV
           OLD_VER=$(helios --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
           echo "Installed: $OLD_VER"
 
@@ -65,7 +67,10 @@ jobs:
           node-version: '22'
 
       - name: Install @helios-agent/cli
-        run: npm install -g @helios-agent/cli
+        run: |
+          npm install -g @helios-agent/cli
+          export PATH="$(npm prefix -g)/bin:$PATH"
+          echo "PATH=$(npm prefix -g)/bin:$PATH" >> $GITHUB_ENV
 
       - name: Setup agent + installer
         run: |
