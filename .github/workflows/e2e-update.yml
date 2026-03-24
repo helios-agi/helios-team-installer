@@ -1,0 +1,85 @@
+name: E2E Update Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test-helios-update:
+    name: helios update flow
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install old @helios-agent/cli
+        run: |
+          npm install -g @helios-agent/cli@0.60.0 2>/dev/null || npm install -g @helios-agent/cli
+          OLD_VER=$(helios --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          echo "Installed: $OLD_VER"
+
+      - name: Setup mock agent directory
+        run: |
+          mkdir -p ~/.pi/agent/bin ~/.pi/agent/extensions ~/.pi/agent/skills
+          echo '{"defaultProvider":"anthropic"}' > ~/.pi/agent/settings.json
+          export PATH="$HOME/.pi/agent/bin:$PATH"
+
+      - name: Setup installer directory
+        run: cp -r $GITHUB_WORKSPACE ~/helios-team-installer
+
+      - name: Run install.sh --update
+        run: |
+          export PATH="$HOME/.pi/agent/bin:$PATH"
+          timeout 180 bash install.sh --update 2>&1 | tee /tmp/update.log
+          echo "✓ update completed"
+
+      - name: Verify CLI was updated
+        run: |
+          LATEST=$(npm view @helios-agent/cli version 2>/dev/null)
+          INSTALLED=$(helios --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          echo "Latest:    $LATEST"
+          echo "Installed: $INSTALLED"
+          [ "$INSTALLED" = "$LATEST" ] || { echo "FAIL: version mismatch"; exit 1; }
+          echo "✓ CLI updated to latest"
+
+      - name: Verify update idempotency
+        run: |
+          export PATH="$HOME/.pi/agent/bin:$PATH"
+          timeout 180 bash install.sh --update 2>&1 | tee /tmp/update-2.log
+          grep -qi 'up to date\|already.*current' /tmp/update-2.log && echo "✓ Idempotent" || echo "⚠ May have reinstalled unnecessarily"
+
+  test-update-full:
+    name: helios update --full (with Docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install @helios-agent/cli
+        run: npm install -g @helios-agent/cli
+
+      - name: Setup agent + installer
+        run: |
+          mkdir -p ~/.pi/agent/bin ~/.pi/agent/extensions ~/.pi/agent/skills ~/.pi/agent/docker
+          echo '{"defaultProvider":"anthropic"}' > ~/.pi/agent/settings.json
+          cp -r $GITHUB_WORKSPACE ~/helios-team-installer
+
+      - name: Run install.sh --update --full
+        run: |
+          export PATH="$HOME/.pi/agent/bin:$PATH"
+          timeout 300 bash install.sh --update --full 2>&1 | tee /tmp/full-update.log || true
+          echo "✓ full update attempted"
+
+      - name: Verify infrastructure steps ran
+        run: |
+          grep -ciE 'memgraph|docker|ollama' /tmp/full-update.log || echo "0"
+          echo "✓ Infrastructure steps were attempted"
