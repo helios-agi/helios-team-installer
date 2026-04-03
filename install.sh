@@ -149,6 +149,16 @@ step()    {
 ask()     { echo -en "${MAGENTA}  ? ${RESET}$* "; }
 _count()  { wc -l | tr -d ' '; }
 
+# User files/dirs preserved during updates — single source of truth.
+# Keep in sync with auto-update.ts RELEASE_MANIFEST (which lists managed files;
+# everything NOT in that manifest is considered user data and preserved).
+HELIOS_PRESERVE_FILES=(
+  .env settings.json governance sessions .helios auth.json
+  run-history.jsonl mcp.json dep-allowlist.json .secrets state
+  models.json pi-messenger.json .update-state.json VERSION
+  .update-log.jsonl .update-lock runtime
+)
+
 HELIOS_RELEASE_URL="https://github.com/sweetcheeks72/helios-team-installer/releases/latest/download"
 HELIOS_AGENT_TARBALL="helios-agent-latest.tar.gz"
 FAMILIAR_REPO="github.com/sweetcheeks72/familiar"
@@ -820,9 +830,7 @@ setup_helios_agent() {
     # Stash user files before extraction
     local tmp_stash
     tmp_stash="$(mktemp -d)"
-    for preserve in .env settings.json governance sessions .helios auth.json run-history.jsonl \
-                    mcp.json dep-allowlist.json .secrets state models.json pi-messenger.json \
-                    .update-state.json VERSION; do
+    for preserve in "${HELIOS_PRESERVE_FILES[@]}"; do
       [[ -e "$PI_AGENT_DIR/$preserve" ]] && cp -a "$PI_AGENT_DIR/$preserve" "$tmp_stash/"
     done
 
@@ -860,9 +868,7 @@ setup_helios_agent() {
     rm -f "$tmp_tarball"
 
     # Restore user files
-    for preserve in .env settings.json governance sessions .helios auth.json run-history.jsonl \
-                    mcp.json dep-allowlist.json .secrets state models.json pi-messenger.json \
-                    .update-state.json VERSION; do
+    for preserve in "${HELIOS_PRESERVE_FILES[@]}"; do
       [[ -e "$tmp_stash/$preserve" ]] && cp -a "$tmp_stash/$preserve" "$PI_AGENT_DIR/"
     done
     rm -rf "$tmp_stash"
@@ -884,9 +890,7 @@ setup_helios_agent() {
     # Stash user files
     local tmp_stash
     tmp_stash="$(mktemp -d)"
-    for preserve in .env settings.json governance sessions .helios auth.json run-history.jsonl \
-                    mcp.json dep-allowlist.json .secrets state models.json pi-messenger.json \
-                    .update-state.json VERSION; do
+    for preserve in "${HELIOS_PRESERVE_FILES[@]}"; do
       [[ -e "$PI_AGENT_DIR/$preserve" ]] && cp -a "$PI_AGENT_DIR/$preserve" "$tmp_stash/"
     done
 
@@ -929,9 +933,7 @@ setup_helios_agent() {
     rm -f "$tmp_tarball"
 
     # Restore user files
-    for preserve in .env settings.json governance sessions .helios auth.json run-history.jsonl \
-                    mcp.json dep-allowlist.json .secrets state models.json pi-messenger.json \
-                    .update-state.json VERSION; do
+    for preserve in "${HELIOS_PRESERVE_FILES[@]}"; do
       [[ -e "$tmp_stash/$preserve" ]] && cp -a "$tmp_stash/$preserve" "$PI_AGENT_DIR/"
     done
     rm -rf "$tmp_stash"
