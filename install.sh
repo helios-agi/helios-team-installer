@@ -1266,44 +1266,69 @@ install_packages() {
     ((bundled_count--)) || true  # subtract the parent dir itself
   fi
 
-  if [[ "$bundled_count" -ge 15 ]]; then
-    success "Packages pre-bundled in tarball ($bundled_count packages)"
-    info "Running helios update to verify and sync..."
-  else
-    info "Downloading packages — this may take 2-3 minutes"
-  fi
-
   if [[ ! -f "$PI_AGENT_DIR/settings.json" ]]; then
     warn "settings.json not found — using Anthropic default"
     cp "$INSTALLER_DIR/provider-configs/anthropic.json" "$PI_AGENT_DIR/settings.json"
   fi
 
-  # Resolve the actual CLI binary — bypass the helios wrapper to avoid
-  # infinite loop (wrapper's update calls install.sh which calls this function)
-  local cli_bin=""
-  # Try npm global prefix
-  cli_bin="$(npm prefix -g 2>/dev/null)/bin/helios" 2>/dev/null
-  if [[ ! -x "$cli_bin" ]] || grep -q "helios — AI operating layer" "$cli_bin" 2>/dev/null; then
-    # That's the wrapper, not the CLI. Try the pi binary name from our fork.
-    cli_bin="$(npm prefix -g 2>/dev/null)/bin/pi" 2>/dev/null
-  fi
-  # Build CLI command array to avoid word-splitting on fallback path
-  local -a cli_cmd
-  if [[ -x "$cli_bin" ]]; then
-    cli_cmd=("$cli_bin")
-  else
-    cli_cmd=(npx @helios-agent/cli)
-  fi
+  if [[ "$bundled_count" -ge 15 ]]; then
+    success "Packages pre-bundled in tarball ($bundled_count packages)"
 
-  STEP_TIMEOUT="$PACKAGE_SYNC_TIMEOUT" run_with_spinner "Running package sync" "${cli_cmd[@]}" update || {
-    if [[ "$bundled_count" -ge 15 ]]; then
-      warn "helios update had issues, but bundled packages are available"
-    else
-      warn "helios update had issues — packages may need manual installation"
+    # Run npm-only update (local packages don't need fetching)
+    # Resolve the actual CLI binary — bypass the helios wrapper to avoid
+    # infinite loop (wrapper's update calls install.sh which calls this function)
+    local cli_bin=""
+    cli_bin="$(npm prefix -g 2>/dev/null)/bin/helios" 2>/dev/null
+    if [[ ! -x "$cli_bin" ]] || grep -q "helios — AI operating layer" "$cli_bin" 2>/dev/null; then
+      cli_bin="$(npm prefix -g 2>/dev/null)/bin/pi" 2>/dev/null
     fi
-    return 0
-  }
-  success "Helios packages installed"
+    local -a cli_cmd
+    if [[ -x "$cli_bin" ]]; then
+      cli_cmd=("$cli_bin")
+    else
+      cli_cmd=(npx @helios-agent/cli)
+    fi
+
+    # Install npm dependencies for bundled packages that have package.json
+    info "Installing npm dependencies for bundled packages..."
+    for pkg_dir in "$PI_AGENT_DIR/git/github.com/sweetcheeks72"/*/; do
+      if [[ -f "${pkg_dir}package.json" ]] && [[ ! -d "${pkg_dir}node_modules" ]]; then
+        local pkg_name
+        pkg_name="$(basename "$pkg_dir")"
+        run_with_spinner "npm install: $pkg_name" npm install --prefix "$pkg_dir" --production 2>>"${LOG_FILE:-/dev/null}" || {
+          warn "npm install failed for $pkg_name — may work without it"
+        }
+      fi
+    done
+
+    # Run update for npm packages only (pi-mcp-adapter)
+    STEP_TIMEOUT="$PACKAGE_SYNC_TIMEOUT" run_with_spinner "Syncing npm packages" "${cli_cmd[@]}" update || {
+      warn "helios update had issues, but bundled packages are available"
+      return 0
+    }
+    success "Helios packages installed"
+  else
+    info "Downloading packages — this may take 2-3 minutes"
+
+    # Resolve the actual CLI binary
+    local cli_bin=""
+    cli_bin="$(npm prefix -g 2>/dev/null)/bin/helios" 2>/dev/null
+    if [[ ! -x "$cli_bin" ]] || grep -q "helios — AI operating layer" "$cli_bin" 2>/dev/null; then
+      cli_bin="$(npm prefix -g 2>/dev/null)/bin/pi" 2>/dev/null
+    fi
+    local -a cli_cmd
+    if [[ -x "$cli_bin" ]]; then
+      cli_cmd=("$cli_bin")
+    else
+      cli_cmd=(npx @helios-agent/cli)
+    fi
+
+    STEP_TIMEOUT="$PACKAGE_SYNC_TIMEOUT" run_with_spinner "Running package sync" "${cli_cmd[@]}" update || {
+      warn "helios update had issues — packages may need manual installation"
+      return 0
+    }
+    success "Helios packages installed"
+  fi
 }
 
 # ─── Bedrock AWS Credentials ──────────────────────────────────────────────────
