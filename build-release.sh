@@ -117,6 +117,7 @@ CHECKSUM_PATH="${DIST_DIR}/${CHECKSUM_NAME}"
 
 TMPDIR="$(mktemp -d)"
 STAGE_DIR="${TMPDIR}/helios-agent-v${VERSION}"
+export STAGE_DIR
 mkdir -p "${STAGE_DIR}"
 
 echo "📂 Staging directory: ${STAGE_DIR}"
@@ -361,8 +362,9 @@ import json, sys, os
 
 source_settings = os.path.expanduser("~/.pi/agent/settings.json")
 if not os.path.exists(source_settings):
-    print("  ⚠ No source settings.json found — skipping")
-    sys.exit(0)
+    print("  ❌ No source settings.json found at ~/.pi/agent/settings.json")
+    print("     Cannot generate tarball settings. Aborting build.")
+    sys.exit(1)
 
 with open(source_settings) as f:
     settings = json.load(f)

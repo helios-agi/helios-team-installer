@@ -1271,23 +1271,22 @@ install_packages() {
     cp "$INSTALLER_DIR/provider-configs/anthropic.json" "$PI_AGENT_DIR/settings.json"
   fi
 
+  # Resolve the actual CLI binary — bypass the helios wrapper to avoid
+  # infinite loop (wrapper's update calls install.sh which calls this function)
+  local cli_bin=""
+  cli_bin="$(npm prefix -g 2>/dev/null)/bin/helios" 2>/dev/null
+  if [[ ! -x "$cli_bin" ]] || grep -q "helios — AI operating layer" "$cli_bin" 2>/dev/null; then
+    cli_bin="$(npm prefix -g 2>/dev/null)/bin/pi" 2>/dev/null
+  fi
+  local -a cli_cmd
+  if [[ -x "$cli_bin" ]]; then
+    cli_cmd=("$cli_bin")
+  else
+    cli_cmd=(npx @helios-agent/cli)
+  fi
+
   if [[ "$bundled_count" -ge 15 ]]; then
     success "Packages pre-bundled in tarball ($bundled_count packages)"
-
-    # Run npm-only update (local packages don't need fetching)
-    # Resolve the actual CLI binary — bypass the helios wrapper to avoid
-    # infinite loop (wrapper's update calls install.sh which calls this function)
-    local cli_bin=""
-    cli_bin="$(npm prefix -g 2>/dev/null)/bin/helios" 2>/dev/null
-    if [[ ! -x "$cli_bin" ]] || grep -q "helios — AI operating layer" "$cli_bin" 2>/dev/null; then
-      cli_bin="$(npm prefix -g 2>/dev/null)/bin/pi" 2>/dev/null
-    fi
-    local -a cli_cmd
-    if [[ -x "$cli_bin" ]]; then
-      cli_cmd=("$cli_bin")
-    else
-      cli_cmd=(npx @helios-agent/cli)
-    fi
 
     # Install npm dependencies for bundled packages that have package.json
     info "Installing npm dependencies for bundled packages..."
@@ -1301,7 +1300,7 @@ install_packages() {
       fi
     done
 
-    # Run update for npm packages only (pi-mcp-adapter)
+    # Run update for npm packages only (local packages are skipped by Pi)
     STEP_TIMEOUT="$PACKAGE_SYNC_TIMEOUT" run_with_spinner "Syncing npm packages" "${cli_cmd[@]}" update || {
       warn "helios update had issues, but bundled packages are available"
       return 0
@@ -1309,19 +1308,6 @@ install_packages() {
     success "Helios packages installed"
   else
     info "Downloading packages — this may take 2-3 minutes"
-
-    # Resolve the actual CLI binary
-    local cli_bin=""
-    cli_bin="$(npm prefix -g 2>/dev/null)/bin/helios" 2>/dev/null
-    if [[ ! -x "$cli_bin" ]] || grep -q "helios — AI operating layer" "$cli_bin" 2>/dev/null; then
-      cli_bin="$(npm prefix -g 2>/dev/null)/bin/pi" 2>/dev/null
-    fi
-    local -a cli_cmd
-    if [[ -x "$cli_bin" ]]; then
-      cli_cmd=("$cli_bin")
-    else
-      cli_cmd=(npx @helios-agent/cli)
-    fi
 
     STEP_TIMEOUT="$PACKAGE_SYNC_TIMEOUT" run_with_spinner "Running package sync" "${cli_cmd[@]}" update || {
       warn "helios update had issues — packages may need manual installation"
