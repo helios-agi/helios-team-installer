@@ -117,6 +117,7 @@ CHECKSUM_PATH="${DIST_DIR}/${CHECKSUM_NAME}"
 
 TMPDIR="$(mktemp -d)"
 STAGE_DIR="${TMPDIR}/helios-agent-v${VERSION}"
+export STAGE_DIR
 mkdir -p "${STAGE_DIR}"
 
 echo "📂 Staging directory: ${STAGE_DIR}"
@@ -343,6 +344,67 @@ for pkg in "${PACKAGES[@]}"; do
 done
 
 echo "✅ Bundled ${bundled}/${#PACKAGES[@]} packages"
+
+# ---------------------------------------------------------------------------
+# Generate settings.json with LOCAL package paths (no git: URLs)
+# ---------------------------------------------------------------------------
+# Pi's package manager treats paths without a known prefix (npm:, git:, etc.)
+# as local paths, resolved relative to ~/.pi/agent/. Since the tarball bundles
+# packages at git/github.com/sweetcheeks72/<pkg>, we point settings.json there.
+# This means `pi update` will NOT try to git-fetch private repos.
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "🔧 Generating settings.json with local package paths..."
+
+python3 << 'PYEOF'
+import json, sys, os
+
+source_settings = os.path.expanduser("~/.pi/agent/settings.json")
+if not os.path.exists(source_settings):
+    print("  ❌ No source settings.json found at ~/.pi/agent/settings.json")
+    print("     Cannot generate tarball settings. Aborting build.")
+    sys.exit(1)
+
+with open(source_settings) as f:
+    settings = json.load(f)
+
+new_packages = []
+converted = 0
+for pkg in settings.get("packages", []):
+    # Handle both string entries and {source: "..."} objects
+    if isinstance(pkg, dict):
+        src = pkg.get("source", "")
+        if src.startswith("git:github.com/sweetcheeks72/"):
+            local_path = src.replace("git:github.com/", "git/github.com/")
+            new_pkg = dict(pkg)
+            new_pkg["source"] = local_path
+            new_packages.append(new_pkg)
+            converted += 1
+        else:
+            new_packages.append(pkg)
+    elif isinstance(pkg, str) and pkg.startswith("git:github.com/sweetcheeks72/"):
+        local_path = pkg.replace("git:github.com/", "git/github.com/")
+        new_packages.append(local_path)
+        converted += 1
+    else:
+        new_packages.append(pkg)
+
+settings["packages"] = new_packages
+
+# Remove user-specific fields that shouldn't ship
+for key in ["mcpServers"]:
+    settings.pop(key, None)
+
+stage_dir = os.environ["STAGE_DIR"]
+out_path = os.path.join(stage_dir, "settings.json")
+with open(out_path, "w") as f:
+    json.dump(settings, f, indent=2)
+    f.write("\n")
+
+print(f"  ✅ Converted {converted} git: entries → local paths")
+print(f"  ✅ settings.json written to tarball staging")
+PYEOF
 
 # ---------------------------------------------------------------------------
 # Write VERSION file
