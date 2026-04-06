@@ -74,6 +74,28 @@ fi
 echo "✅ Source directory found: ${SOURCE_DIR}"
 
 # ---------------------------------------------------------------------------
+# Warn if source has uncommitted changes
+# ---------------------------------------------------------------------------
+
+if [[ -d "${SOURCE_DIR}/.git" ]]; then
+  local_changes=$(git -C "${SOURCE_DIR}" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+  if [[ "$local_changes" -gt "0" ]]; then
+    echo ""
+    echo "⚠️  WARNING: ${SOURCE_DIR} has ${local_changes} uncommitted change(s)"
+    echo "   These WILL be included in the release tarball."
+    echo ""
+    read -p "   Continue anyway? [y/N] " -r confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+      echo "❌ Aborted. Commit or stash changes first."
+      exit 1
+    fi
+    echo ""
+  else
+    echo "✅ Source directory is clean (no uncommitted changes)"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # Prepare output directory
 # ---------------------------------------------------------------------------
 
@@ -234,6 +256,18 @@ find "${STAGE_DIR}/extensions" -name "*.bak" -delete 2>/dev/null || true
 echo "✅ Cleanup complete"
 
 # ---------------------------------------------------------------------------
+# Generate release manifest (used by auto-update for smart file merging)
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "📋 Generating release manifest..."
+(
+  cd "${STAGE_DIR}"
+  find . -maxdepth 2 -not -path './.git/*' | sed 's|^\./||' | sort
+) > "${STAGE_DIR}/.release-manifest.txt"
+echo "✅ Release manifest: $(wc -l < "${STAGE_DIR}/.release-manifest.txt" | tr -d ' ') entries"
+
+# ---------------------------------------------------------------------------
 # Bundle git packages (so fresh installs get everything in one download)
 # ---------------------------------------------------------------------------
 
@@ -381,7 +415,15 @@ echo "  📌 Version  : ${DIST_DIR}/VERSION"
 echo ""
 # Create latest symlink for installer compatibility
 cp "${TARBALL_PATH}" "${DIST_DIR}/helios-agent-latest.tar.gz"
-cp "${CHECKSUM_PATH}" "${DIST_DIR}/helios-agent-latest.tar.gz.sha256"
+# Regenerate checksum for latest copy with correct relative filename
+(
+  cd "${DIST_DIR}"
+  if command -v sha256sum &>/dev/null; then
+    sha256sum "helios-agent-latest.tar.gz" > "helios-agent-latest.tar.gz.sha256"
+  elif command -v shasum &>/dev/null; then
+    shasum -a 256 "helios-agent-latest.tar.gz" > "helios-agent-latest.tar.gz.sha256"
+  fi
+)
 echo "  📎 Latest   : ${DIST_DIR}/helios-agent-latest.tar.gz"
 echo ""
 echo "============================================================"
