@@ -32,11 +32,6 @@ if [[ -f "$INSTALLER_DIR/lib/platform.sh" ]]; then
   source "$INSTALLER_DIR/lib/platform.sh"
 fi
 
-# ─── Source preserve-files library ────────────────────────────────────────────
-if [[ -f "$INSTALLER_DIR/lib/preserve-files.sh" ]]; then
-  source "$INSTALLER_DIR/lib/preserve-files.sh"
-fi
-
 # ─── Source containers library ────────────────────────────────────────────────
 if [[ -f "$INSTALLER_DIR/lib/containers.sh" ]]; then
   source "$INSTALLER_DIR/lib/containers.sh"
@@ -205,9 +200,16 @@ _timeout_cmd() {
   elif command -v gtimeout &>/dev/null; then
     gtimeout "$@"
   else
-    # No timeout available — run command without guard
-    shift  # discard the timeout duration argument
-    "$@"
+    local duration=$1; shift
+    "$@" &
+    local cmd_pid=$!
+    ( sleep "$duration" && kill -9 "$cmd_pid" 2>/dev/null ) &
+    local killer_pid=$!
+    wait "$cmd_pid" 2>/dev/null
+    local exit_code=$?
+    kill "$killer_pid" 2>/dev/null 2>&1
+    wait "$killer_pid" 2>/dev/null 2>&1
+    return $exit_code
   fi
 }
 
@@ -460,7 +462,7 @@ check_prerequisites() {
       # FIX #1: Cache sudo credentials first + FIX #2: NONINTERACTIVE=1
       info "Homebrew needs admin access — you may be prompted for your password."
       sudo -v 2>/dev/null || true
-      NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" >> "$LOG_FILE" 2>&1
+      NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/aec7285/install.sh)" >> "$LOG_FILE" 2>&1
       # Add brew to PATH for this session
       if [[ -x /opt/homebrew/bin/brew ]]; then
         eval "$(/opt/homebrew/bin/brew shellenv)" 2>/dev/null || true
@@ -1682,6 +1684,7 @@ persist_runtime_contract() {
     echo "OLLAMA_URL=http://localhost:11434"
     echo "HELIOS_GRAPH_BOOTSTRAP_STATE_DIR=$PI_AGENT_DIR/state/codebase-bootstrap"
   } > "$contract_file"
+  chmod 600 "$contract_file"
   success "Runtime contract written: $contract_file (container: $resolved_container)"
 }
 
@@ -1989,6 +1992,7 @@ with open(target, 'w') as f:
     json.dump(mcp, f, indent=2)
     f.write('\n')
 " "$mcp_file" 2>/dev/null && success "mcp.json written (figma-remote, memgraph, github)" || warn "Could not write mcp.json"
+  chmod 600 "$mcp_file" 2>/dev/null || true
 }
 
 # ─── API Key Setup ────────────────────────────────────────────────────────────
@@ -2482,7 +2486,7 @@ detect_update_mode() {
     [[ "$arg" == "--update" ]] && { UPDATE_MODE=true; return 0; }
   done
 
-  # If agent dir exists with a configured provider and .env, this is an update
+  # If agent dir exists with a configured provider and VERSION file, this is an update
   if [[ -d "$PI_AGENT_DIR" ]] && [[ -f "$PI_AGENT_DIR/settings.json" ]]; then
     local current_provider=""
     local current_model=""
@@ -2500,7 +2504,7 @@ detect_update_mode() {
     fi
 
     if [[ -n "$current_provider" ]] && [[ "$current_provider" != "null" ]] && [[ "$current_provider" != "undefined" ]]; then
-      if [[ -f "$PI_AGENT_DIR/.env" ]]; then
+      if [[ -f "$PI_AGENT_DIR/VERSION" ]]; then
         UPDATE_MODE=true
         info "Existing install detected"
         info "Running in update mode — skipping interactive steps"
@@ -2620,7 +2624,12 @@ print('queued: ' + target)
   then
     local bg_pid=$!
     disown "$bg_pid" 2>/dev/null || true
-    success "Bootstrap job launched (PID $bg_pid) — indexing will complete in background"
+    sleep 1
+    if kill -0 "$bg_pid" 2>/dev/null; then
+      success "Bootstrap job launched (PID $bg_pid)"
+    else
+      warn "Bootstrap job failed to start — check $bootstrap_log"
+    fi
     info "Log: $bootstrap_log"
     info "Status: ls $bootstrap_dir/"
   else
@@ -2711,6 +2720,8 @@ setup_boot_services() {
     if [[ ! -f "$mg_plist" ]]; then
       local docker_path
       docker_path=$(command -v docker 2>/dev/null || echo "/usr/local/bin/docker")
+      local mg_container_name
+      mg_container_name=$(resolve_memgraph_container 2>/dev/null) || mg_container_name="memgraph"
       cat > "$mg_plist" << PLIST_EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -2718,7 +2729,7 @@ setup_boot_services() {
 <dict>
   <key>Label</key><string>com.helios.memgraph</string>
   <key>ProgramArguments</key>
-  <array><string>${docker_path}</string><string>start</string><string>memgraph</string></array>
+  <array><string>${docker_path}</string><string>start</string><string>${mg_container_name}</string></array>
   <key>RunAtLoad</key><true/>
   <key>StandardOutPath</key><string>/tmp/helios-memgraph.log</string>
   <key>StandardErrorPath</key><string>/tmp/helios-memgraph.err</string>

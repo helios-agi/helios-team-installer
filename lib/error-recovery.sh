@@ -32,7 +32,6 @@ RESET="${RESET:-}"
 # 1. STEP TRACKING
 # =============================================================================
 
-TOTAL_STEPS=14
 CURRENT_STEP=0
 
 # step_start <step_name>
@@ -43,8 +42,13 @@ step_start() {
   CURRENT_STEP=$(( CURRENT_STEP + 1 ))
   # Store for step_fail to reference
   _CURRENT_STEP_NAME="$step_name"
-  printf "  ${CYAN}▶ [%d/%d]${RESET} ${BOLD}%s${RESET} ..." \
-    "$CURRENT_STEP" "$TOTAL_STEPS" "$step_name"
+  if [[ -n "${TOTAL_STEPS:-}" ]]; then
+    printf "  ${CYAN}▶ [%d/%d]${RESET} ${BOLD}%s${RESET} ..." \
+      "$CURRENT_STEP" "$TOTAL_STEPS" "$step_name"
+  else
+    printf "  ${CYAN}▶ [%d]${RESET} ${BOLD}%s${RESET} ..." \
+      "$CURRENT_STEP" "$step_name"
+  fi
 }
 
 # step_done
@@ -283,14 +287,14 @@ _KNOWN_FIX_CMDS=(
   "brew link --overwrite NODE_FORMULA"
   "brew link --overwrite NODE_FORMULA"
   "open -a OrbStack || open -a Docker"
-  "lsof -ti:7687 | xargs kill -9"
-  "Close other apps to free memory"
-  "Close other apps to free memory"
-  "Free up disk space (need 500MB+)"
-  "Free up disk space (need 500MB+)"
+  "{ _pids=\$(lsof -ti:7687 2>/dev/null | tr '\\n' ' '); if [ -n \"\$_pids\" ]; then if ps -p \$_pids -o comm= 2>/dev/null | grep -qi 'memgraph'; then kill -9 \$_pids 2>/dev/null; else echo 'Port 7687 in use but not by Memgraph — skipping kill'; fi; fi; }"
+  "echo 'Close other apps to free memory'"
+  "echo 'Close other apps to free memory'"
+  "echo 'Free up disk space (need 500MB+)'"
+  "echo 'Free up disk space (need 500MB+)'"
   "xcode-select --install"
   "xcode-select --install"
-  "Check file permissions or run with sudo"
+  "echo 'Check file permissions or run with sudo'"
 )
 
 # lookup_known_fix <error_output>
@@ -470,20 +474,9 @@ run_step() {
   local tmp_output
   tmp_output="$(mktemp /tmp/helios-step-XXXXXX 2>/dev/null || echo "/tmp/helios-step-$$")"
 
-  # ── Start heartbeat (background dots every 10s) ────────────────────
-  (
-    while sleep 10; do
-      printf "." >&2
-    done
-  ) &
-  local heartbeat_pid=$!
-  
   # ── Run command ─────────────────────────────────────────────────────
   local exit_code=0
   if "${cmd[@]}" >"$tmp_output" 2>&1; then
-    # Kill heartbeat
-    kill "$heartbeat_pid" 2>/dev/null || true
-    wait "$heartbeat_pid" 2>/dev/null || true
     _INSIDE_RUN_STEP=false
     _kill_hb
     step_done
@@ -491,10 +484,6 @@ run_step() {
     rm -f "$tmp_output"
     return 0
   else
-    # Kill heartbeat on failure
-    kill "$heartbeat_pid" 2>/dev/null || true
-    wait "$heartbeat_pid" 2>/dev/null || true
-    
     exit_code=$?
     _INSIDE_RUN_STEP=false
     _kill_hb
