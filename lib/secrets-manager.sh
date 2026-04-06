@@ -157,9 +157,28 @@ _secrets_file_path() {
 }
 
 _secrets_machine_key() {
-  # Derive a machine-specific key from hostname + user + kernel
+  # ─────────────────────────────────────────────────────────────────────────
+  # SECURITY WARNING: File-based encryption (this code path) is NOT secure
+  # against an attacker who has read access to the filesystem.  The encrypted
+  # file, the salt, and all key-derivation inputs are stored on the same disk.
+  # Use the system keychain (Keychain on macOS, Secret Service on Linux)
+  # wherever possible — this fallback exists only for environments where no
+  # keychain is available.
+  # ─────────────────────────────────────────────────────────────────────────
+  local salt_file="$HOME/.pi/agent/.secrets-salt"
+  local salt
+  if [[ -f "$salt_file" ]]; then
+    salt="$(cat "$salt_file")"
+  else
+    # First run: generate a random salt and persist it
+    salt="$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | base64)"
+    mkdir -p "$(dirname "$salt_file")"
+    printf '%s' "$salt" > "$salt_file"
+    chmod 600 "$salt_file"
+  fi
+
   local raw
-  raw="$(hostname 2>/dev/null)$(whoami)$(uname -r 2>/dev/null)"
+  raw="${salt}$(hostname 2>/dev/null)$(whoami)$(uname -r 2>/dev/null)"
   if command -v shasum &>/dev/null; then
     echo "$raw" | shasum -a 256 | awk '{print $1}'
   elif command -v sha256sum &>/dev/null; then
