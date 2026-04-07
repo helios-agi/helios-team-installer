@@ -450,32 +450,51 @@ check_prerequisites() {
   info "Platform: $platform | bash: ${BASH_VERSION:-unknown} | user: $(whoami)"
   info "Node: $(node -v 2>/dev/null || echo 'not found') | npm: $(npm -v 2>/dev/null || echo 'not found') | prefix: $(npm config get prefix 2>/dev/null || echo 'n/a')"
 
-  # ── Homebrew (macOS only) ──────────────────────────────────────────────────
+  # ── Homebrew (macOS — REQUIRED) ────────────────────────────────────────────
   if [[ "$platform" == "macos" ]] && ! command -v brew &>/dev/null; then
-    # Check admin access before attempting Homebrew install
-    if ! groups 2>/dev/null | grep -qw admin && ! sudo -n true 2>/dev/null; then
-      warn "Homebrew requires admin privileges, but user '$(whoami)' is not an Administrator"
-      info "Skipping Homebrew — will try direct installs instead"
-      info "To fix: System Settings → Users & Groups → make '$(whoami)' an Admin, then re-run"
-    else
-      info "Installing Homebrew (required for macOS package management)..."
-      # FIX #1: Cache sudo credentials first + FIX #2: NONINTERACTIVE=1
-      info "Homebrew needs admin access — you may be prompted for your password."
-      sudo -v 2>/dev/null || true
-      NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/aec7285/install.sh)" >> "$LOG_FILE" 2>&1
-      # Add brew to PATH for this session
-      if [[ -x /opt/homebrew/bin/brew ]]; then
-        eval "$(/opt/homebrew/bin/brew shellenv)" 2>/dev/null || true
-      elif [[ -x /usr/local/bin/brew ]]; then
-        eval "$(/usr/local/bin/brew shellenv)" 2>/dev/null || true
-      fi
-      if command -v brew &>/dev/null; then
-        success "Homebrew installed"
-      else
-        warn "Homebrew install failed — will try direct installs instead"
-        info "Install Homebrew manually later: https://brew.sh"
-      fi
+    info "Installing Homebrew (required for macOS package management)..."
+    info "You may be prompted for your password."
+    # Ensure we have admin access
+    if ! sudo -v 2>/dev/null; then
+      error "Homebrew requires admin privileges."
+      echo -e "    ${BOLD}Fix:${RESET} Run this command first to get admin access:"
+      echo -e "    ${DIM}  su - admin_username  # switch to an admin account${RESET}"
+      echo -e "    ${DIM}  # Or: System Settings → Users & Groups → make '$(whoami)' an Admin${RESET}"
+      echo -e "    Then re-run the installer."
+      exit 1
     fi
+    NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/aec7285/install.sh)" >> "$LOG_FILE" 2>&1
+    # Add brew to PATH for this session
+    if [[ -x /opt/homebrew/bin/brew ]]; then
+      eval "$(/opt/homebrew/bin/brew shellenv)" 2>/dev/null || true
+    elif [[ -x /usr/local/bin/brew ]]; then
+      eval "$(/usr/local/bin/brew shellenv)" 2>/dev/null || true
+    fi
+    if ! command -v brew &>/dev/null; then
+      error "Homebrew install failed."
+      echo -e "    Install manually: ${BOLD}/bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"${RESET}"
+      echo -e "    Then re-run the installer."
+      exit 1
+    fi
+    success "Homebrew installed"
+    # Persist Homebrew PATH to shell profile
+    brew_shellenv=""
+    if [[ -x /opt/homebrew/bin/brew ]]; then
+      brew_shellenv='eval "$(/opt/homebrew/bin/brew shellenv)"'
+    elif [[ -x /usr/local/bin/brew ]]; then
+      brew_shellenv='eval "$(/usr/local/bin/brew shellenv)"'
+    fi
+    if [[ -n "$brew_shellenv" ]]; then
+      for rc in "$HOME/.zprofile" "$HOME/.bash_profile"; do
+        if [[ -f "$rc" ]] || [[ "$rc" == *"zprofile"* ]]; then
+          if ! grep -qF 'brew shellenv' "$rc" 2>/dev/null; then
+            echo "$brew_shellenv" >> "$rc"
+          fi
+        fi
+      done
+    fi
+  elif [[ "$platform" == "macos" ]]; then
+    success "Homebrew $(brew --version 2>/dev/null | head -1 | awk '{print $2}')"
   fi
 
   # ── One-time apt-get update (linux/wsl) ────────────────────────────────────

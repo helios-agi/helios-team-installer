@@ -169,58 +169,57 @@ fi
 # ─── Auto-install Prerequisites ───────────────────────────────────────────────
 echo -e "  ${BOLD}Installing prerequisites...${RESET}"
 
-# ─── Admin check for Homebrew (macOS) ──────────────────────────────────────────
-HAS_ADMIN=false
-if [[ "$PLATFORM" == "Darwin" ]]; then
-  if groups 2>/dev/null | grep -qw admin || sudo -n true 2>/dev/null; then
-    HAS_ADMIN=true
-  fi
-fi
-
-# Homebrew (macOS only)
+# Homebrew (macOS — REQUIRED)
 if [[ "$PLATFORM" == "Darwin" ]] && ! command -v brew &>/dev/null; then
-  if [[ "$HAS_ADMIN" == false ]]; then
-    echo -e "  ${YELLOW}⚠${RESET}  Homebrew requires admin privileges, but user '$(whoami)' is not an Administrator."
-    echo -e "  ${DIM}Skipping Homebrew — will install Node.js directly instead.${RESET}"
+  echo -e "  ${CYAN}⬇${RESET}  Installing Homebrew (required for macOS)..."
+  echo -e "  ${DIM}You may be prompted for your password.${RESET}"
+  # Ensure we have admin access
+  if ! sudo -v 2>/dev/null; then
     echo ""
-    echo -e "  ${DIM}To fix: System Settings → Users & Groups → make '$(whoami)' an Admin, then re-run.${RESET}"
-    echo ""
-  else
-    echo -e "  ${CYAN}⬇${RESET}  Installing Homebrew..."
-    HOMEBREW_INSTALL_URL="https://raw.githubusercontent.com/Homebrew/install/aec7285/install.sh"
-    BREW_INSTALLER="/tmp/homebrew-install.sh"
-    curl -fsSL "$HOMEBREW_INSTALL_URL" -o "$BREW_INSTALLER"
-    echo -e "  ${DIM}Homebrew installer downloaded — pinned to known-good commit aec7285${RESET}"
-    # FIX #1: Cache sudo credentials before Homebrew install so password prompt works
-    echo -e "  ${DIM}Homebrew needs admin access — you may be prompted for your password.${RESET}"
-    sudo -v 2>/dev/null || true
-    # FIX #2: Set NONINTERACTIVE=1 to skip Homebrew's "Press RETURN" prompt
-    NONINTERACTIVE=1 /bin/bash "$BREW_INSTALLER"
-    rm -f "$BREW_INSTALLER"
-    # Add brew to PATH for this session
-    if [[ -x /opt/homebrew/bin/brew ]]; then
-      eval "$(/opt/homebrew/bin/brew shellenv)" 2>/dev/null || true
-    elif [[ -x /usr/local/bin/brew ]]; then
-      eval "$(/usr/local/bin/brew shellenv)" 2>/dev/null || true
-    fi
-    command -v brew &>/dev/null && echo -e "  ${GREEN}✓${RESET} Homebrew installed" || { echo -e "  ${RED}✗${RESET} Homebrew install failed"; exit 1; }
-    # FIX #5: Persist Homebrew PATH to shell profile so it survives new terminals
-    brew_shellenv=""
-    if [[ -x /opt/homebrew/bin/brew ]]; then
-      brew_shellenv='eval "$(/opt/homebrew/bin/brew shellenv)"'
-    elif [[ -x /usr/local/bin/brew ]]; then
-      brew_shellenv='eval "$(/usr/local/bin/brew shellenv)"'
-    fi
-    if [[ -n "$brew_shellenv" ]]; then
-      for rc in "$HOME/.zprofile" "$HOME/.bash_profile"; do
-        if [[ -f "$rc" ]] || [[ "$rc" == *"zprofile"* ]]; then
-          if ! grep -qF 'brew shellenv' "$rc" 2>/dev/null; then
-            echo "$brew_shellenv" >> "$rc"
-          fi
-        fi
-      done
-    fi
+    echo -e "  ${RED}✗${RESET}  Homebrew requires admin privileges."
+    echo -e "    ${BOLD}Fix:${RESET} Run this command first to get admin access:"
+    echo -e "    ${DIM}  su - admin_username  # switch to an admin account${RESET}"
+    echo -e "    ${DIM}  # Or: System Settings → Users & Groups → make '$(whoami)' an Admin${RESET}"
+    echo -e "    Then re-run the installer."
+    exit 1
   fi
+  HOMEBREW_INSTALL_URL="https://raw.githubusercontent.com/Homebrew/install/aec7285/install.sh"
+  BREW_INSTALLER="/tmp/homebrew-install.sh"
+  curl -fsSL "$HOMEBREW_INSTALL_URL" -o "$BREW_INSTALLER"
+  echo -e "  ${DIM}Homebrew installer downloaded — pinned to known-good commit aec7285${RESET}"
+  NONINTERACTIVE=1 /bin/bash "$BREW_INSTALLER"
+  rm -f "$BREW_INSTALLER"
+  # Add brew to PATH for this session
+  if [[ -x /opt/homebrew/bin/brew ]]; then
+    eval "$(/opt/homebrew/bin/brew shellenv)" 2>/dev/null || true
+  elif [[ -x /usr/local/bin/brew ]]; then
+    eval "$(/usr/local/bin/brew shellenv)" 2>/dev/null || true
+  fi
+  if ! command -v brew &>/dev/null; then
+    echo -e "  ${RED}✗${RESET}  Homebrew install failed."
+    echo -e "    Install manually: ${BOLD}/bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"${RESET}"
+    echo -e "    Then re-run the installer."
+    exit 1
+  fi
+  echo -e "  ${GREEN}✓${RESET} Homebrew installed"
+  # Persist Homebrew PATH to shell profile
+  brew_shellenv=""
+  if [[ -x /opt/homebrew/bin/brew ]]; then
+    brew_shellenv='eval "$(/opt/homebrew/bin/brew shellenv)"'
+  elif [[ -x /usr/local/bin/brew ]]; then
+    brew_shellenv='eval "$(/usr/local/bin/brew shellenv)"'
+  fi
+  if [[ -n "$brew_shellenv" ]]; then
+    for rc in "$HOME/.zprofile" "$HOME/.bash_profile"; do
+      if [[ -f "$rc" ]] || [[ "$rc" == *"zprofile"* ]]; then
+        if ! grep -qF 'brew shellenv' "$rc" 2>/dev/null; then
+          echo "$brew_shellenv" >> "$rc"
+        fi
+      fi
+    done
+  fi
+elif [[ "$PLATFORM" == "Darwin" ]]; then
+  echo -e "  ${GREEN}✓${RESET} Homebrew $(brew --version 2>/dev/null | head -1 | awk '{print $2}')"
 fi
 
 # Node.js 18+
@@ -235,24 +234,6 @@ if [[ "$node_ok" == false ]]; then
   echo -e "  ${CYAN}⬇${RESET}  Installing Node.js..."
   if [[ "$PLATFORM" == "Darwin" ]] && command -v brew &>/dev/null; then
     brew install node 2>&1
-  elif [[ "$PLATFORM" == "Darwin" ]] && ! command -v brew &>/dev/null; then
-    # No Homebrew (non-admin user) — install Node.js via official .pkg or fnm
-    echo -e "  ${DIM}No Homebrew available — installing Node.js via fnm (Fast Node Manager)...${RESET}"
-    if curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell 2>/dev/null; then
-      export FNM_DIR="$HOME/.local/share/fnm"
-      export PATH="$FNM_DIR:$PATH"
-      if [[ -x "$FNM_DIR/fnm" ]]; then
-        eval "$("$FNM_DIR/fnm" env --shell bash)" 2>/dev/null || true
-        "$FNM_DIR/fnm" install 22 2>/dev/null
-        eval "$("$FNM_DIR/fnm" env --shell bash)" 2>/dev/null || true
-      fi
-    fi
-    if ! command -v node &>/dev/null; then
-      echo -e "  ${RED}✗${RESET} Node.js install failed without Homebrew."
-      echo -e "    ${DIM}Option 1: Make your user an admin → re-run installer (gets Homebrew)${RESET}"
-      echo -e "    ${DIM}Option 2: Download Node.js from https://nodejs.org and install the .pkg${RESET}"
-      exit 1
-    fi
   elif command -v apt-get &>/dev/null; then
     if command -v curl &>/dev/null; then
       NODE_SETUP="/tmp/nodesource_setup_22.x.sh"
