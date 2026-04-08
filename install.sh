@@ -161,6 +161,21 @@ PI_AGENT_DIR="$HOME/.pi/agent"
 FAMILIAR_DIR="$HOME/.familiar"
 LOG_FILE="$INSTALLER_DIR/install.log"
 
+# ─── Migrate settings.json packages from git: (clone) to git/ (local path) ──
+# Tarball bundles packages into ~/.pi/agent/git/..., so settings.json must
+# reference them as local paths (git/github.com/...) not remote sources
+# (git:github.com/...) which would trigger git clone against private repos.
+_migrate_settings_packages() {
+  local settings_file="$PI_AGENT_DIR/settings.json"
+  [[ -f "$settings_file" ]] || return 0
+  if grep -q '"git:github\.com/' "$settings_file" 2>/dev/null; then
+    sed -i.bak 's|"git:github\.com/|"git/github.com/|g' "$settings_file"
+    sed -i.bak "s|'git:github\.com/|'git/github.com/|g" "$settings_file"
+    rm -f "${settings_file}.bak"
+    info "Migrated settings.json packages: git: → git/ (local paths)"
+  fi
+}
+
 # Log to file AND terminal. Best-effort — if tee fails, continue without logging.
 # CRITICAL: Do NOT redirect stderr through tee. If tee/pipe breaks, stderr must
 # still reach the terminal so error messages (including the cleanup trap) are visible.
@@ -894,6 +909,9 @@ setup_helios_agent() {
     done
     rm -rf "$tmp_stash"
 
+    # Migrate preserved settings.json from git: (clone) to git/ (local path)
+    _migrate_settings_packages
+
     success "Helios agent updated to $remote_version"
     # Ensure VERSION file exists after update
     if [[ ! -f "$PI_AGENT_DIR/VERSION" ]]; then
@@ -958,6 +976,9 @@ setup_helios_agent() {
       [[ -e "$tmp_stash/$preserve" ]] && cp -a "$tmp_stash/$preserve" "$PI_AGENT_DIR/"
     done
     rm -rf "$tmp_stash"
+
+    # Migrate preserved settings.json from git: (clone) to git/ (local path)
+    _migrate_settings_packages
 
     success "Migrated from git to tarball distribution ($(cat "$PI_AGENT_DIR/VERSION" 2>/dev/null || echo 'unknown'))"
     # Ensure VERSION file exists after migration
@@ -2955,6 +2976,11 @@ main() {
   fi
 
   if [[ "$UPDATE_MODE" == true ]]; then
+    # Clear checkpoint so update steps are never skipped — a previous failed
+    # install/update may have checkpointed past these steps without completing them.
+    if type clear_checkpoint &>/dev/null; then
+      clear_checkpoint
+    fi
     snapshot_state
     run_step "Pi CLI"             update_pi_cli
     run_step "Agent Directory"    update_agent_dir
