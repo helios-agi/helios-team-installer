@@ -199,6 +199,7 @@ rsync -a \
   --exclude='.backup.*/' \
   --exclude='*.log' \
   --exclude='git/' \
+  --exclude='packages/' \
   --exclude='backups/' \
   --exclude='.archive/' \
   --exclude='.lab/' \
@@ -345,6 +346,15 @@ done
 
 echo "✅ Bundled ${bundled}/${#PACKAGES[@]} packages"
 
+# Validation: abort if 0 packages bundled
+if [[ "$bundled" -eq 0 ]]; then
+  echo ""
+  echo "❌ ERROR: 0 packages bundled!"
+  echo "   Expected git packages in ${HOME}/.pi/agent/git/github.com/sweetcheeks72/"
+  echo "   The tarball would be incomplete. Aborting build."
+  exit 1
+fi
+
 # ---------------------------------------------------------------------------
 # Generate settings.json with LOCAL package paths (no git: URLs)
 # ---------------------------------------------------------------------------
@@ -412,6 +422,34 @@ PYEOF
 
 echo "${VERSION}" > "${STAGE_DIR}/VERSION"
 echo "✅ VERSION file written: ${VERSION}"
+
+# ---------------------------------------------------------------------------
+# Pre-tarball verification: Ensure git/ directory exists and is populated
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "🔍 Pre-tarball verification..."
+
+if [[ ! -d "${STAGE_DIR}/git/github.com/sweetcheeks72" ]]; then
+  echo "❌ CRITICAL: git/ directory missing from staging!"
+  echo "   Bundle step must have failed. Aborting build."
+  exit 1
+fi
+
+GIT_PKG_COUNT=$(find "${STAGE_DIR}/git/github.com/sweetcheeks72" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
+if [[ "$GIT_PKG_COUNT" -lt 10 ]]; then
+  echo "❌ CRITICAL: Only ${GIT_PKG_COUNT} packages in git/ directory (expected 15+)"
+  echo "   Bundle step incomplete. Aborting build."
+  exit 1
+fi
+
+echo "✅ Verification passed: ${GIT_PKG_COUNT} packages in git/github.com/sweetcheeks72/"
+
+if [[ -d "${STAGE_DIR}/packages" ]]; then
+  echo "⚠️  WARNING: packages/ directory exists in staging (should have been excluded)"
+  echo "   This suggests rsync --exclude='packages/' is not working."
+  echo "   Continuing build, but please investigate."
+fi
 
 # ---------------------------------------------------------------------------
 # Create tarball
