@@ -4,18 +4,37 @@
 
 # Return the current CPU architecture: arm64 or x86_64
 current_arch() {
-  uname -m
+  local machine
+  machine="$(uname -m)"
+  case "$machine" in
+    arm64|aarch64) echo "arm64" ;;
+    x86_64|amd64)  echo "x86_64" ;;
+    *)             echo "$machine" ;;
+  esac
+}
+
+# Return true if running on Apple Silicon (arm64 Mac)
+is_apple_silicon() {
+  [[ "$(uname -s)" == "Darwin" ]] && [[ "$(uname -m)" == "arm64" ]]
 }
 
 # Return the expected Homebrew prefix for the current architecture
 homebrew_prefix() {
-  local arch
-  arch=$(current_arch)
-  if [[ "$arch" == "arm64" ]]; then
+  if is_apple_silicon; then
     echo "/opt/homebrew"
   else
     echo "/usr/local"
   fi
+}
+
+# Return the Docker platform string for the current architecture
+# Used as DOCKER_DEFAULT_PLATFORM env var in docker compose calls
+docker_platform() {
+  case "$(current_arch)" in
+    arm64)  echo "linux/arm64" ;;
+    x86_64) echo "linux/amd64" ;;
+    *)      echo "linux/$(current_arch)" ;;
+  esac
 }
 
 is_wsl() {
@@ -32,36 +51,6 @@ current_platform() {
   else
     echo "unknown"
   fi
-}
-
-current_arch() {
-  local machine
-  machine="$(uname -m)"
-  case "$machine" in
-    arm64|aarch64) echo "arm64" ;;
-    x86_64|amd64)  echo "x86_64" ;;
-    *)             echo "$machine" ;;
-  esac
-}
-
-is_apple_silicon() {
-  [[ "$(uname -s)" == "Darwin" ]] && [[ "$(uname -m)" == "arm64" ]]
-}
-
-homebrew_prefix() {
-  if is_apple_silicon; then
-    echo "/opt/homebrew"
-  else
-    echo "/usr/local"
-  fi
-}
-
-docker_platform() {
-  case "$(current_arch)" in
-    arm64)  echo "linux/arm64" ;;
-    x86_64) echo "linux/amd64" ;;
-    *)      echo "linux/$(current_arch)" ;;
-  esac
 }
 
 # Install a system dependency using the appropriate package manager
