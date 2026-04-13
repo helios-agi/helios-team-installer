@@ -2,6 +2,22 @@
 # lib/platform.sh — Shared platform detection for helios installer
 # Sourced by both bootstrap.sh and install.sh
 
+# Return the current CPU architecture: arm64 or x86_64
+current_arch() {
+  uname -m
+}
+
+# Return the expected Homebrew prefix for the current architecture
+homebrew_prefix() {
+  local arch
+  arch=$(current_arch)
+  if [[ "$arch" == "arm64" ]]; then
+    echo "/opt/homebrew"
+  else
+    echo "/usr/local"
+  fi
+}
+
 is_wsl() {
   [[ -f /proc/version ]] && grep -qiE "microsoft|wsl" /proc/version 2>/dev/null
 }
@@ -16,6 +32,36 @@ current_platform() {
   else
     echo "unknown"
   fi
+}
+
+current_arch() {
+  local machine
+  machine="$(uname -m)"
+  case "$machine" in
+    arm64|aarch64) echo "arm64" ;;
+    x86_64|amd64)  echo "x86_64" ;;
+    *)             echo "$machine" ;;
+  esac
+}
+
+is_apple_silicon() {
+  [[ "$(uname -s)" == "Darwin" ]] && [[ "$(uname -m)" == "arm64" ]]
+}
+
+homebrew_prefix() {
+  if is_apple_silicon; then
+    echo "/opt/homebrew"
+  else
+    echo "/usr/local"
+  fi
+}
+
+docker_platform() {
+  case "$(current_arch)" in
+    arm64)  echo "linux/arm64" ;;
+    x86_64) echo "linux/amd64" ;;
+    *)      echo "linux/$(current_arch)" ;;
+  esac
 }
 
 # Install a system dependency using the appropriate package manager
