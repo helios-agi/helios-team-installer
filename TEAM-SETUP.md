@@ -5,7 +5,7 @@
 Run this one command. It handles everything:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/helios-agi/helios-team-installer/main/bootstrap.sh | bash
 ```
 
 The installer walks you through each step interactively. Total time: ~10 minutes.
@@ -14,7 +14,7 @@ The installer walks you through each step interactively. Total time: ~10 minutes
 >
 > **Fallback (if curl isn't available):**
 > ```bash
-> git clone https://github.com/sweetcheeks72/helios-team-installer.git ~/helios-team-installer && bash ~/helios-team-installer/install.sh
+> git clone https://github.com/helios-agi/helios-team-installer.git ~/helios-team-installer && bash ~/helios-team-installer/install.sh
 > ```
 
 When it's done, open any project and type `pi` — you now have an AI orchestrator that plans, delegates, reviews, and verifies code.
@@ -70,9 +70,9 @@ You need all three layers. The installer sets them all up.
 ### Accept your GitHub invitations FIRST
 
 You should have received 3 invitation emails from GitHub for:
-1. `sweetcheeks72/helios-team-installer` — the installer (this repo)
-2. `sweetcheeks72/helios-agent` — the Helios brain (agents, skills, config)
-3. `sweetcheeks72/familiar` — productivity skills (Gmail, Calendar, Drive)
+1. `helios-agi/helios-team-installer` — the installer (this repo)
+2. `helios-agi/helios-agent` — the Helios brain (agents, skills, config)
+3. `helios-agi/familiar` — productivity skills (Gmail, Calendar, Drive)
 
 **Accept all 3 before running the installer.** Go to [github.com/notifications](https://github.com/notifications) or check your email.
 
@@ -112,7 +112,7 @@ This is the fastest way to get started. You can always switch to Bedrock later.
 ### Step-by-step walkthrough
 
 ```bash
-git clone https://github.com/sweetcheeks72/helios-team-installer.git ~/helios-team-installer
+git clone https://github.com/helios-agi/helios-team-installer.git ~/helios-team-installer
 bash ~/helios-team-installer/install.sh
 ```
 
@@ -328,7 +328,7 @@ curl -I https://github.com
 git config --global http.proxy http://your-proxy:port
 
 # Try updating a single package to isolate the issue:
-pi update git:github.com/sweetcheeks72/pi-subagents
+pi update git:github.com/helios-agi/pi-subagents
 ```
 
 ### Agents count is low (< 40)
@@ -414,4 +414,4 @@ HELP:
 
 ## Questions?
 
-Ping the team lead or open an issue on `sweetcheeks72/helios-team-installer`.
+Ping the team lead or open an issue on `helios-agi/helios-team-installer`.

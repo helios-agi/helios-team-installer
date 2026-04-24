@@ -380,7 +380,7 @@ offer_troubleshoot() {
   else
     echo -e "  ${DIM}No automatic fix available.${RESET}"
     echo -e "  ${DIM}Diagnostic info saved to ${DIAGNOSTIC_FILE}${RESET}"
-    echo -e "  ${CYAN}Get help: https://github.com/sweetcheeks72/helios-team-installer/issues${RESET}"
+    echo -e "  ${CYAN}Get help: https://github.com/helios-agi/helios-team-installer/issues${RESET}"
     return 1
   fi
 }

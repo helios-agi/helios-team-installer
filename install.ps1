@@ -7,7 +7,7 @@
     helios.cmd, helios.ps1, pi.cmd, and pi.ps1 shims so the
     commands work from any PowerShell or CMD window.
 .EXAMPLE
-    irm https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/install.ps1 | iex
+    irm https://raw.githubusercontent.com/helios-agi/helios-team-installer/main/install.ps1 | iex
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -176,7 +176,7 @@ if (-not $ubuntuReady) {
         Write-Host ""
         Write-Host "      Start-Process pwsh -Verb RunAs" -ForegroundColor Yellow
         Write-Host "      # Then re-run:" -ForegroundColor DarkGray
-        Write-Host "      irm https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/install.ps1 | iex" -ForegroundColor Yellow
+        Write-Host "      irm https://raw.githubusercontent.com/helios-agi/helios-team-installer/main/install.ps1 | iex" -ForegroundColor Yellow
         Write-Host ""
         exit 1
     }
@@ -233,7 +233,7 @@ if (-not $ubuntuReady) {
     Write-Warn "║  4. Re-run this command in PowerShell:                   ║"
     Write-Warn "║                                                           ║"
     Write-Warn "║    irm https://raw.githubusercontent.com/                ║"
-    Write-Warn "║      sweetcheeks72/helios-team-installer/                ║"
+    Write-Warn "║      helios-agi/helios-team-installer/                ║"
     Write-Warn "║      main/install.ps1 | iex                              ║"
     Write-Warn "╚══════════════════════════════════════════════════════════╝"
     Write-Host ""
@@ -295,7 +295,7 @@ Write-Host ""
 # ── Step 5b — Run the bootstrap (with one automatic retry on failure) ─────────
 Write-Host "  ┄┄┄┄┄┄┄┄┄┄ WSL session begin ┄┄┄┄┄┄┄┄┄┄" -ForegroundColor DarkGray
 
-& wsl -d $ubuntuDistro -- bash -c "curl --max-time 600 -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh | bash"
+& wsl -d $ubuntuDistro -- bash -c "curl --max-time 600 -fsSL https://raw.githubusercontent.com/helios-agi/helios-team-installer/main/bootstrap.sh | bash"
 
 $wslExit = $LASTEXITCODE
 Write-Host "  ┄┄┄┄┄┄┄┄┄┄ WSL session end ┄┄┄┄┄┄┄┄┄┄┄" -ForegroundColor DarkGray
@@ -312,7 +312,7 @@ if ($wslExit -ne 0) {
     Write-Host ""
     Write-Host "  ┄┄┄┄┄┄┄┄┄┄ WSL session begin (retry) ┄┄┄┄┄┄┄┄┄┄" -ForegroundColor DarkGray
 
-    & wsl -d $ubuntuDistro -- bash -c "curl --max-time 600 -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh | bash"
+    & wsl -d $ubuntuDistro -- bash -c "curl --max-time 600 -fsSL https://raw.githubusercontent.com/helios-agi/helios-team-installer/main/bootstrap.sh | bash"
 
     $wslExit = $LASTEXITCODE
     Write-Host "  ┄┄┄┄┄┄┄┄┄┄ WSL session end ┄┄┄┄┄┄┄┄┄┄┄" -ForegroundColor DarkGray
@@ -322,7 +322,7 @@ if ($wslExit -ne 0) {
         Write-Err "Bootstrap failed after retry (exit code $wslExit)."
         Write-Err "Run this command directly inside Ubuntu to install manually:"
         Write-Err ""
-        Write-Err "  curl -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh | bash"
+        Write-Err "  curl -fsSL https://raw.githubusercontent.com/helios-agi/helios-team-installer/main/bootstrap.sh | bash"
         Write-Err ""
         Write-Err "Open Ubuntu from the Start Menu, paste the command above, and press Enter."
         exit $wslExit

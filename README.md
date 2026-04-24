@@ -5,7 +5,7 @@
 ## Install (first time)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/helios-agi/helios-team-installer/main/bootstrap.sh | bash
 ```
 
 This walks you through provider selection, API keys, and installs everything: Pi CLI, Helios agents, extensions, packages, Memgraph, Ollama, and MCP servers.
@@ -15,12 +15,12 @@ This walks you through provider selection, API keys, and installs everything: Pi
 One command in PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/helios-agi/helios-team-installer/main/install.ps1 | iex
 ```
 
 **Or from Command Prompt (no PowerShell needed):**
 ```cmd
-curl -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/install.bat -o %TEMP%\install-helios.bat && %TEMP%\install-helios.bat
+curl -fsSL https://raw.githubusercontent.com/helios-agi/helios-team-installer/main/install.bat -o %TEMP%\install-helios.bat && %TEMP%\install-helios.bat
 ```
 
 This automatically:
@@ -33,7 +33,7 @@ This automatically:
 
 **Manual WSL setup** (if you prefer):
 1. `wsl --install` in admin PowerShell, restart
-2. Open Ubuntu, then: `curl -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh | bash`
+2. Open Ubuntu, then: `curl -fsSL https://raw.githubusercontent.com/helios-agi/helios-team-installer/main/bootstrap.sh | bash`
 
 📖 **First time?** Read the [full team setup guide](TEAM-SETUP.md) — explains everything from scratch.
 
@@ -48,7 +48,7 @@ That's it — pulls the latest agents, skills, extensions, and governance from t
 **Alternative — full re-run** (also safe for updates):
 ```bash
 # Same install command — auto-detects existing install, skips provider/key prompts
-curl -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/helios-agi/helios-team-installer/main/bootstrap.sh | bash
 
 # Or locally:
 bash ~/helios-team-installer/install.sh          # update (non-interactive)
@@ -230,7 +230,7 @@ If the installer fails, here are the manual steps:
 npm install -g @helios-agent/cli
 
 # 2. Clone Helios agent
-git clone https://github.com/sweetcheeks72/helios-agent.git ~/.pi/agent
+git clone https://github.com/helios-agi/helios-agent.git ~/.pi/agent
 
 # 3. Configure provider
 cp ~/helios-team-installer/provider-configs/anthropic.json ~/.pi/agent/settings.json
@@ -243,7 +243,7 @@ cp ~/helios-team-installer/.env.template ~/.pi/agent/.env
 pi update
 
 # 6. (Optional) Familiar skills
-git clone https://github.com/sweetcheeks72/familiar.git ~/.familiar
+git clone https://github.com/helios-agi/familiar.git ~/.familiar
 # NOTE: Verify the Familiar repo URL before running
 
 # 7. Verify
@@ -353,7 +353,7 @@ bash ~/helios-team-installer/install.sh
 
 ## Notes
 
-- **Familiar repo URL**: The installer assumes `github.com/sweetcheeks72/familiar`. Verify this URL is correct for your team before running.
+- **Familiar repo URL**: The installer assumes `github.com/helios-agi/familiar`. Verify this URL is correct for your team before running.
 - **Autoresearch / helios-research**: These are intentionally excluded from this installer (experimental features).
 - **API key security**: Keys are written to `~/.pi/agent/.env` which is gitignored by default. Never commit `.env` to version control.
 
