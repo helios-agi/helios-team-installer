@@ -46,7 +46,7 @@ for _arg in "$@"; do
       echo "  --help     Show this help message"
       echo ""
       echo "First install (team members):"
-      echo "  curl -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh | bash"
+      echo "  curl -fsSL https://raw.githubusercontent.com/helios-agi/helios-team-installer/main/bootstrap.sh | bash"
       echo ""
       echo "Re-run / update:"
       echo "  helios update"
@@ -63,7 +63,7 @@ if [[ ! -t 0 ]]; then
     exec < /dev/tty || true
   else
     echo "ERROR: No terminal available (/dev/tty). Run this script directly instead of piping." >&2
-    echo "  curl -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh -o /tmp/helios-bootstrap.sh && bash /tmp/helios-bootstrap.sh" >&2
+    echo "  curl -fsSL https://raw.githubusercontent.com/helios-agi/helios-team-installer/main/bootstrap.sh -o /tmp/helios-bootstrap.sh && bash /tmp/helios-bootstrap.sh" >&2
     exit 1
   fi
 fi
@@ -134,9 +134,9 @@ step()    {
 ask()     { echo -en "${MAGENTA}  ? ${RESET}$* "; }
 _count()  { wc -l | tr -d ' '; }
 
-HELIOS_RELEASE_URL="https://github.com/sweetcheeks72/helios-team-installer/releases/latest/download"
+HELIOS_RELEASE_URL="https://github.com/helios-agi/helios-team-installer/releases/latest/download"
 HELIOS_AGENT_TARBALL="helios-agent-latest.tar.gz"
-FAMILIAR_REPO="github.com/sweetcheeks72/familiar"
+FAMILIAR_REPO="github.com/helios-agi/familiar"
 PI_AGENT_DIR="$HOME/.pi/agent"
 FAMILIAR_DIR="$HOME/.familiar"
 LOG_FILE="$INSTALLER_DIR/install.log"
@@ -774,9 +774,18 @@ install_packages() {
   step "Installing Pi packages"
 
   # Check if packages were bundled in the tarball
+  # Resolve org directory: helios-agi (current) → sweetcheeks72 (legacy) → nicobailon (fallback)
   local bundled_count=0
-  if [[ -d "$PI_AGENT_DIR/git/github.com/sweetcheeks72" ]]; then
-    bundled_count=$(find "$PI_AGENT_DIR/git/github.com/sweetcheeks72" -maxdepth 1 -type d 2>/dev/null | _count)
+  local GIT_ORG_DIR=""
+  for _org in helios-agi sweetcheeks72 nicobailon; do
+    if [[ -d "$PI_AGENT_DIR/git/github.com/$_org" ]]; then
+      GIT_ORG_DIR="$PI_AGENT_DIR/git/github.com/$_org"
+      break
+    fi
+  done
+
+  if [[ -n "$GIT_ORG_DIR" ]]; then
+    bundled_count=$(find "$GIT_ORG_DIR" -maxdepth 1 -type d 2>/dev/null | _count)
     ((bundled_count--)) || true  # subtract the parent dir itself
   fi
 
@@ -1645,8 +1654,14 @@ dedup_skills_extensions() {
   # Remove legacy local extensions that are now provided as git packages
   local legacy_exts=("pi-review-loop")
   for legacy_ext in "${legacy_exts[@]}"; do
-    if [[ -d "$PI_AGENT_DIR/extensions/$legacy_ext" ]] && \
-       [[ -d "$PI_AGENT_DIR/git/github.com/sweetcheeks72/$legacy_ext" ]]; then
+    local _found_pkg=false
+    for _org in helios-agi sweetcheeks72 nicobailon; do
+      if [[ -d "$PI_AGENT_DIR/git/github.com/$_org/$legacy_ext" ]]; then
+        _found_pkg=true
+        break
+      fi
+    done
+    if [[ -d "$PI_AGENT_DIR/extensions/$legacy_ext" ]] && $_found_pkg; then
       info "Removing legacy extension $legacy_ext (now provided by git package)"
       rm -rf "$PI_AGENT_DIR/extensions/$legacy_ext"
     fi

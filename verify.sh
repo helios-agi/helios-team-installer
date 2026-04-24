@@ -257,7 +257,14 @@ fi
 critical_pkgs=("pi-interview-tool" "visual-explainer" "pi-design-deck" "pi-subagents" "pi-web-access")
 missing_critical=()
 for pkg in "${critical_pkgs[@]}"; do
-  if [[ ! -d "$PI_AGENT_DIR/git/github.com/sweetcheeks72/$pkg" ]]; then
+  local _pkg_found=false
+  for _org in helios-agi sweetcheeks72 nicobailon; do
+    if [[ -d "$PI_AGENT_DIR/git/github.com/$_org/$pkg" ]]; then
+      _pkg_found=true
+      break
+    fi
+  done
+  if ! $_pkg_found; then
     missing_critical+=("$pkg")
   fi
 done

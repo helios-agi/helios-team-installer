@@ -2,7 +2,7 @@
 # =============================================================================
 # Helios + Pi — One-Command Bootstrap
 # =============================================================================
-# Usage: curl -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/helios-agi/helios-team-installer/main/bootstrap.sh | bash
 # =============================================================================
 
 {
@@ -12,7 +12,7 @@ case "$(uname -s 2>/dev/null)" in
   MINGW*|MSYS*|CYGWIN*)
     echo ""
     echo "Helios requires WSL. Run in PowerShell:"
-    echo "  irm https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/install.ps1 | iex"
+    echo "  irm https://raw.githubusercontent.com/helios-agi/helios-team-installer/main/install.ps1 | iex"
     echo "See: https://learn.microsoft.com/en-us/windows/wsl/install"
     exit 1
     ;;
@@ -28,7 +28,7 @@ if [[ ! -t 0 ]]; then
     exec < /dev/tty
   else
     echo "ERROR: No terminal available (/dev/tty). Run this script directly instead of piping." >&2
-    echo "  curl -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh -o /tmp/helios-bootstrap.sh && bash /tmp/helios-bootstrap.sh" >&2
+    echo "  curl -fsSL https://raw.githubusercontent.com/helios-agi/helios-team-installer/main/bootstrap.sh -o /tmp/helios-bootstrap.sh && bash /tmp/helios-bootstrap.sh" >&2
     exit 1
   fi
 fi
@@ -48,7 +48,7 @@ fi
 
 PLATFORM="$(uname -s)"
 INSTALLER_DIR="$HOME/helios-team-installer"
-INSTALLER_REPO="https://github.com/sweetcheeks72/helios-team-installer.git"
+INSTALLER_REPO="https://github.com/helios-agi/helios-team-installer.git"
 
 # Source shared platform detection lib (only available after installer is cloned)
 _source_platform_lib() {
@@ -78,7 +78,7 @@ echo -e "  ${DIM}Setting up prerequisites — this may take 1-2 minutes...${RESE
 echo ""
 
 # ─── FIX #6: Network connectivity check ──────────────────────────────────────
-if ! curl -fsSL --connect-timeout 5 --max-time 10 https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh -o /dev/null 2>/dev/null; then
+if ! curl -fsSL --connect-timeout 5 --max-time 10 https://raw.githubusercontent.com/helios-agi/helios-team-installer/main/bootstrap.sh -o /dev/null 2>/dev/null; then
   echo -e "  ${RED}✗${RESET} Cannot reach GitHub. Check your internet connection or VPN."
   echo -e "  ${DIM}If behind a firewall, ensure raw.githubusercontent.com is accessible.${RESET}"
   exit 1
@@ -139,7 +139,7 @@ if [[ "$PLATFORM" == "Darwin" ]]; then
       echo "  A dialog box should appear asking to install developer tools."
       echo "  Click 'Install' and wait for it to complete, then re-run:"
       echo ""
-      echo "    curl -fsSL https://raw.githubusercontent.com/sweetcheeks72/helios-team-installer/main/bootstrap.sh | bash"
+      echo "    curl -fsSL https://raw.githubusercontent.com/helios-agi/helios-team-installer/main/bootstrap.sh | bash"
       echo "  ──────────────────────────────────────────────────────────"
       echo ""
       xcode-select --install 2>/dev/null || true
@@ -360,7 +360,7 @@ echo ""
 # Verify install.sh exists
 if [[ ! -f "$INSTALLER_DIR/install.sh" ]]; then
   echo -e "  ${RED}✗${RESET} install.sh not found in cloned repo. Repository structure may have changed." >&2
-  echo -e "    Check: https://github.com/sweetcheeks72/helios-team-installer" >&2
+  echo -e "    Check: https://github.com/helios-agi/helios-team-installer" >&2
   exit 1
 fi
 

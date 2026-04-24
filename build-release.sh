@@ -280,7 +280,7 @@ echo "✅ Release manifest: $(wc -l < "${STAGE_DIR}/.release-manifest.txt" | tr 
 echo ""
 echo "📦 Bundling git packages ..."
 
-BUNDLE_GIT_DIR="${STAGE_DIR}/git/github.com/sweetcheeks72"
+BUNDLE_GIT_DIR="${STAGE_DIR}/git/github.com/helios-agi"
 mkdir -p "${BUNDLE_GIT_DIR}"
 
 PACKAGES=(
@@ -307,9 +307,17 @@ PACKAGES=(
 )
 
 bundled=0
+# Resolve packages from helios-agi (current) → sweetcheeks72 (legacy) → nicobailon (fallback)
 for pkg in "${PACKAGES[@]}"; do
-  if [[ -d "${HOME}/.pi/agent/git/github.com/sweetcheeks72/${pkg}" ]]; then
-    # Copy from local cache (faster, already verified)
+  local_src=""
+  for _org in helios-agi sweetcheeks72 nicobailon; do
+    if [[ -d "${HOME}/.pi/agent/git/github.com/${_org}/${pkg}" ]]; then
+      local_src="${HOME}/.pi/agent/git/github.com/${_org}/${pkg}"
+      break
+    fi
+  done
+
+  if [[ -n "$local_src" ]]; then
     rsync -a \
       --exclude='.git/' \
       --exclude='node_modules/' \
@@ -322,26 +330,7 @@ for pkg in "${PACKAGES[@]}"; do
       --exclude='.pi/' \
       --exclude='dist/' \
       --exclude='*.log' \
-      "${HOME}/.pi/agent/git/github.com/sweetcheeks72/${pkg}/" \
-      "${BUNDLE_GIT_DIR}/${pkg}/"
-    ((bundled++)) || true
-  elif [[ -d "${HOME}/.pi/agent/git/github.com/nicobailon/${pkg}" ]]; then
-    # Fallback to nicobailon copy if sweetcheeks72 not present
-    rsync -a \
-      --exclude='.git/' \
-      --exclude='node_modules/' \
-      --exclude='.venv/' \
-      --exclude='__pycache__/' \
-      --exclude='*.mp4' \
-      --exclude='*.png' \
-      --exclude='*.gif' \
-      --exclude='*.webm' \
-      --exclude='.pi/' \
-      --exclude='dist/' \
-      --exclude='*.log' \
-      --exclude='.venv/' \
-      --exclude='__pycache__/' \
-      "${HOME}/.pi/agent/git/github.com/nicobailon/${pkg}/" \
+      "${local_src}/" \
       "${BUNDLE_GIT_DIR}/${pkg}/"
     ((bundled++)) || true
   else
@@ -355,7 +344,7 @@ echo "✅ Bundled ${bundled}/${#PACKAGES[@]} packages"
 if [[ "$bundled" -eq 0 ]]; then
   echo ""
   echo "❌ ERROR: 0 packages bundled!"
-  echo "   Expected git packages in ${HOME}/.pi/agent/git/github.com/sweetcheeks72/"
+  echo "   Expected git packages in ${HOME}/.pi/agent/git/github.com/{helios-agi,sweetcheeks72,nicobailon}/"
   echo "   The tarball would be incomplete. Aborting build."
   exit 1
 fi
@@ -365,7 +354,7 @@ fi
 # ---------------------------------------------------------------------------
 # Pi's package manager treats paths without a known prefix (npm:, git:, etc.)
 # as local paths, resolved relative to ~/.pi/agent/. Since the tarball bundles
-# packages at git/github.com/sweetcheeks72/<pkg>, we point settings.json there.
+# packages at git/github.com/helios-agi/<pkg>, we point settings.json there.
 # This means `pi update` will NOT try to git-fetch private repos.
 # ---------------------------------------------------------------------------
 
@@ -373,7 +362,7 @@ echo ""
 echo "🔧 Generating settings.json with local package paths..."
 
 python3 << 'PYEOF'
-import json, sys, os
+import json, sys, os, re
 
 source_settings = os.path.expanduser("~/.pi/agent/settings.json")
 if not os.path.exists(source_settings):
@@ -384,24 +373,38 @@ if not os.path.exists(source_settings):
 with open(source_settings) as f:
     settings = json.load(f)
 
+# Match any org variant: helios-agi, sweetcheeks72, nicobailon
+ORG_PATTERN = re.compile(r"^git[:/]github\.com/(helios-agi|sweetcheeks72|nicobailon)/")
+TARGET_ORG = "helios-agi"  # canonical org in shipped tarball
+
+def normalize_to_local(path_or_src):
+    """Convert any org variant to local tarball path under helios-agi."""
+    m = ORG_PATTERN.match(path_or_src)
+    if m:
+        # Normalize: git:github.com/ANY_ORG/pkg → git/github.com/helios-agi/pkg
+        #            git/github.com/ANY_ORG/pkg  → git/github.com/helios-agi/pkg
+        normalized = ORG_PATTERN.sub(f"git/github.com/{TARGET_ORG}/", path_or_src)
+        return normalized, True
+    return path_or_src, False
+
 new_packages = []
 converted = 0
 for pkg in settings.get("packages", []):
-    # Handle both string entries and {source: "..."} objects
     if isinstance(pkg, dict):
         src = pkg.get("source", "")
-        if src.startswith("git:github.com/sweetcheeks72/"):
-            local_path = src.replace("git:github.com/", "git/github.com/")
+        new_src, did_convert = normalize_to_local(src)
+        if did_convert:
             new_pkg = dict(pkg)
-            new_pkg["source"] = local_path
+            new_pkg["source"] = new_src
             new_packages.append(new_pkg)
             converted += 1
         else:
             new_packages.append(pkg)
-    elif isinstance(pkg, str) and pkg.startswith("git:github.com/sweetcheeks72/"):
-        local_path = pkg.replace("git:github.com/", "git/github.com/")
-        new_packages.append(local_path)
-        converted += 1
+    elif isinstance(pkg, str):
+        new_pkg, did_convert = normalize_to_local(pkg)
+        new_packages.append(new_pkg)
+        if did_convert:
+            converted += 1
     else:
         new_packages.append(pkg)
 
@@ -435,20 +438,20 @@ echo "✅ VERSION file written: ${VERSION}"
 echo ""
 echo "🔍 Pre-tarball verification..."
 
-if [[ ! -d "${STAGE_DIR}/git/github.com/sweetcheeks72" ]]; then
+if [[ ! -d "${STAGE_DIR}/git/github.com/helios-agi" ]]; then
   echo "❌ CRITICAL: git/ directory missing from staging!"
   echo "   Bundle step must have failed. Aborting build."
   exit 1
 fi
 
-GIT_PKG_COUNT=$(find "${STAGE_DIR}/git/github.com/sweetcheeks72" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
+GIT_PKG_COUNT=$(find "${STAGE_DIR}/git/github.com/helios-agi" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
 if [[ "$GIT_PKG_COUNT" -lt 10 ]]; then
   echo "❌ CRITICAL: Only ${GIT_PKG_COUNT} packages in git/ directory (expected 15+)"
   echo "   Bundle step incomplete. Aborting build."
   exit 1
 fi
 
-echo "✅ Verification passed: ${GIT_PKG_COUNT} packages in git/github.com/sweetcheeks72/"
+echo "✅ Verification passed: ${GIT_PKG_COUNT} packages in git/github.com/helios-agi/"
 
 if [[ -d "${STAGE_DIR}/packages" ]]; then
   echo "⚠️  WARNING: packages/ directory exists in staging (should have been excluded)"
