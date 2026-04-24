@@ -487,6 +487,39 @@ install_pi() {
 }
 
 # ─── Helios Agent (Tarball) ───────────────────────────────────────────────────
+
+# ─── Settings Migration Helper ────────────────────────────────────────
+_migrate_settings_packages() {
+  local settings_file="$PI_AGENT_DIR/settings.json"
+  [[ -f "$settings_file" ]] || return 0
+
+  # Migrate URL-style git: prefix to local path style git/
+  if grep -q '"git:github\.com/' "$settings_file" 2>/dev/null; then
+    sed -i.bak 's|"git:github\.com/|"git/github.com/|g' "$settings_file"
+    sed -i.bak 's|'"'"'git:github\.com/|'"'"'git/github.com/|g' "$settings_file"
+    rm -f "${settings_file}.bak"
+    info "Migrated settings.json packages: git: → git/ (local paths)"
+  fi
+
+  # Normalize legacy org names to helios-agi
+  for _old_org in sweetcheeks72 nicobailon; do
+    if grep -q "git/github\.com/${_old_org}/" "$settings_file" 2>/dev/null; then
+      sed -i.bak "s|git/github\.com/${_old_org}/|git/github.com/helios-agi/|g" "$settings_file"
+      rm -f "${settings_file}.bak"
+      info "Migrated settings.json org: ${_old_org} → helios-agi"
+    fi
+  done
+}
+
+# ─── Stale Org Cleanup Helper ─────────────────────────────────────────
+_prune_stale_org_dirs() {
+  for _stale_org in sweetcheeks72 nicobailon; do
+    if [[ -d "$PI_AGENT_DIR/git/github.com/$_stale_org" ]]; then
+      info "Removing stale org dir: git/github.com/$_stale_org/"
+      rm -rf "$PI_AGENT_DIR/git/github.com/$_stale_org"
+    fi
+  done
+}
 setup_helios_agent() {
   step "Helios Agent (~/.pi/agent/)"
 
@@ -573,6 +606,10 @@ setup_helios_agent() {
     restore_preserve_files "$tmp_stash" "$PI_AGENT_DIR"
     rm -rf "$tmp_stash"
 
+    # Migrate settings.json org names + prune stale dirs
+    _migrate_settings_packages
+    _prune_stale_org_dirs
+
     success "Helios agent updated to $remote_version"
     # Ensure VERSION file exists after update
     if [[ ! -f "$PI_AGENT_DIR/VERSION" ]]; then
@@ -633,6 +670,10 @@ setup_helios_agent() {
     # Restore user files (delegates to lib/preserve-files.sh)
     restore_preserve_files "$tmp_stash" "$PI_AGENT_DIR"
     rm -rf "$tmp_stash"
+
+    # Migrate settings.json org names + prune stale dirs
+    _migrate_settings_packages
+    _prune_stale_org_dirs
 
     success "Migrated from git to tarball distribution ($(cat "$PI_AGENT_DIR/VERSION" 2>/dev/null || echo 'unknown'))"
     # Ensure VERSION file exists after migration
@@ -791,6 +832,19 @@ install_packages() {
 
   if [[ "$bundled_count" -ge 15 ]]; then
     success "Packages pre-bundled in tarball ($bundled_count packages)"
+
+    # Install npm dependencies for bundled packages that have package.json
+    info "Installing npm dependencies for bundled packages..."
+    for pkg_dir in "$GIT_ORG_DIR"/*/; do
+      if [[ -f "${pkg_dir}package.json" ]] && [[ ! -d "${pkg_dir}node_modules" ]]; then
+        local pkg_name
+        pkg_name="$(basename "$pkg_dir")"
+        run_with_spinner "npm install: $pkg_name" npm install --prefix "$pkg_dir" --production 2>>"${LOG_FILE:-/dev/null}" || {
+          warn "npm install failed for $pkg_name — may work without it"
+        }
+      fi
+    done
+
     info "Running helios update to verify and sync..."
   else
     info "Downloading packages — this may take 2-3 minutes"

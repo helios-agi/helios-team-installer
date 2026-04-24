@@ -168,12 +168,33 @@ LOG_FILE="$INSTALLER_DIR/install.log"
 _migrate_settings_packages() {
   local settings_file="$PI_AGENT_DIR/settings.json"
   [[ -f "$settings_file" ]] || return 0
+
+  # Migrate URL-style git: prefix to local path style git/
   if grep -q '"git:github\.com/' "$settings_file" 2>/dev/null; then
     sed -i.bak 's|"git:github\.com/|"git/github.com/|g' "$settings_file"
     sed -i.bak "s|'git:github\.com/|'git/github.com/|g" "$settings_file"
     rm -f "${settings_file}.bak"
     info "Migrated settings.json packages: git: → git/ (local paths)"
   fi
+
+  # Normalize legacy org names to helios-agi
+  for _old_org in sweetcheeks72 nicobailon; do
+    if grep -q "git/github\.com/${_old_org}/" "$settings_file" 2>/dev/null; then
+      sed -i.bak "s|git/github\.com/${_old_org}/|git/github.com/helios-agi/|g" "$settings_file"
+      rm -f "${settings_file}.bak"
+      info "Migrated settings.json org: ${_old_org} → helios-agi"
+    fi
+  done
+}
+
+# Prune stale org directories from previous installs
+_prune_stale_org_dirs() {
+  for _stale_org in sweetcheeks72 nicobailon; do
+    if [[ -d "$PI_AGENT_DIR/git/github.com/$_stale_org" ]]; then
+      info "Removing stale org dir: git/github.com/$_stale_org/"
+      rm -rf "$PI_AGENT_DIR/git/github.com/$_stale_org"
+    fi
+  done
 }
 
 # Log to file AND terminal. Best-effort — if tee fails, continue without logging.
@@ -899,6 +920,7 @@ setup_helios_agent() {
 
     # Migrate preserved settings.json from git: (clone) to git/ (local path)
     _migrate_settings_packages
+    _prune_stale_org_dirs
 
     success "Helios agent updated to $remote_version"
     # Ensure VERSION file exists after update
@@ -967,6 +989,7 @@ setup_helios_agent() {
 
     # Migrate preserved settings.json from git: (clone) to git/ (local path)
     _migrate_settings_packages
+    _prune_stale_org_dirs
 
     success "Migrated from git to tarball distribution ($(cat "$PI_AGENT_DIR/VERSION" 2>/dev/null || echo 'unknown'))"
     # Ensure VERSION file exists after migration
@@ -1969,7 +1992,7 @@ setup_searxng() {
   done
 
   if [[ -z "$SEARXNG_DIR" ]]; then
-    warn "SearXNG config not found in bundle ($SEARXNG_DIR)"
+    warn "SearXNG config (helios-compose.yml) not found under any org dir"
     info "Re-run the installer or update your helios-agent tarball"
     INSTALL_WARNINGS+=("SearXNG skipped — config not in bundle")
     return 0
