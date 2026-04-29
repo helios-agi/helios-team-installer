@@ -1487,7 +1487,8 @@ install_agent_deps() {
   fi
 
   if [[ -d "$PI_AGENT_DIR/node_modules/awilix" ]] && \
-     [[ -d "$PI_AGENT_DIR/node_modules/neo4j-driver" ]]; then
+     [[ -d "$PI_AGENT_DIR/node_modules/neo4j-driver" ]] && \
+     [[ -d "$PI_AGENT_DIR/node_modules/@helios-agent/pi-coding-agent" ]]; then
     success "Agent root dependencies already installed"
     return 0
   fi
