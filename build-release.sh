@@ -138,6 +138,8 @@ echo "              sessions/, .helios/, .backup.*, *.log, *.disabled,"
 echo "              run-history.jsonl, mcp-cache.json, user artifacts"
 
 rsync -a \
+  --exclude='*.sock' \
+  --exclude='run/' \
   --exclude='.git/' \
   --exclude='node_modules/' \
   --exclude='.venv/' \
