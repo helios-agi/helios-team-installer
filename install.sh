@@ -349,6 +349,48 @@ run_with_spinner() {
   fi
 }
 
+# ── npm install with cache recovery ──────────────────────────────────────────
+# Runs npm install with automatic cache repair on EACCES/EEXIST failures.
+# Usage: npm_install_with_recovery <dir> [label] [extra_flags]
+npm_install_with_recovery() {
+  local dir="$1"
+  local label="${2:-npm install}"
+  local extra_flags="${3:-}"
+
+  # First attempt
+  if run_with_spinner "$label" \
+    env NPM_DIR="$dir" bash -c 'cd "$NPM_DIR" && npm install --production --legacy-peer-deps --no-audit --no-fund '$extra_flags' 2>&1'; then
+    return 0
+  fi
+
+  # Diagnose and repair npm cache
+  warn "$label failed — attempting npm cache repair..."
+  local npm_cache_dir
+  npm_cache_dir=$(npm config get cache 2>/dev/null || echo "$HOME/.npm")
+
+  # Fix ownership if cache dir exists and is owned by someone else
+  if [[ -d "$npm_cache_dir" ]]; then
+    local npm_owner
+    npm_owner=$(stat -f '%Su' "$npm_cache_dir" 2>/dev/null || stat -c '%U' "$npm_cache_dir" 2>/dev/null || echo "")
+    if [[ -n "$npm_owner" && "$npm_owner" != "$(whoami)" ]]; then
+      info "Fixing npm cache ownership ($npm_owner → $(whoami))..."
+      if ! chown -R "$(whoami)" "$npm_cache_dir" 2>/dev/null; then
+        error "Cannot fix npm cache ownership — run: sudo chown -R \$(whoami) $npm_cache_dir"
+        return 1
+      fi
+    fi
+  fi
+
+  # Clean and verify cache
+  npm cache clean --force 2>/dev/null || true
+  npm cache verify 2>/dev/null || true
+
+  # Retry
+  info "Retrying $label after cache repair..."
+  run_with_spinner "$label (retry)" \
+    env NPM_DIR="$dir" bash -c 'cd "$NPM_DIR" && npm install --production --legacy-peer-deps --no-audit --no-fund '$extra_flags' 2>&1'
+}
+
 # Verify SHA256 checksum of a file against a checksum file.
 # Returns 0 on match (or no sha256 tool available), 1 on mismatch.
 _verify_sha256() {
@@ -1344,8 +1386,7 @@ install_packages() {
     # Verify @helios-agent peer deps are resolvable from agent root
     if [[ ! -d "$PI_AGENT_DIR/node_modules/@helios-agent/pi-coding-agent" ]]; then
       info "Installing @helios-agent peer dependencies in agent root..."
-      run_with_spinner "npm install (agent root)" \
-        bash -c "cd '$PI_AGENT_DIR' && npm install --production --legacy-peer-deps --no-audit --no-fund 2>&1" || {
+      npm_install_with_recovery "$PI_AGENT_DIR" "npm install (peer deps)" || {
         warn "Agent root npm install failed — packages with @helios-agent peer deps may not work"
       }
     fi
@@ -1545,8 +1586,8 @@ install_agent_deps() {
 
   # Fallback: full npm install (deps not in tarball or rebuild failed)
   info "Installing agent dependencies via npm (not bundled in tarball)..."
-  run_with_spinner "npm install (agent root)" \
-    bash -c "cd '$PI_AGENT_DIR' && npm install --production --legacy-peer-deps --no-audit --no-fund 2>&1" || {
+  npm_install_with_recovery "$PI_AGENT_DIR" "npm install (agent root)" || {
+    fail "npm install (agent root)"
     warn "Agent root npm install failed — many extensions will not load"
     info "You can retry: cd ~/.pi/agent && npm install --production"
     INSTALL_WARNINGS+=("Agent root deps failed — extensions will be broken")

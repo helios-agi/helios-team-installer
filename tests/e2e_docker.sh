@@ -11,6 +11,19 @@
 
 set -euo pipefail
 
+# ─── Host-mode detection ──────────────────────────────────────────────────────
+# When run on the host (outside the container), build the Docker image and
+# re-invoke this script inside it.  Inside the container the sentinel dir
+# /helios-installer already exists thanks to the Dockerfile COPY step.
+if [[ ! -d "/helios-installer" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+  echo "[host] Building Docker E2E image from ${REPO_ROOT} …"
+  docker build -f "${REPO_ROOT}/Dockerfile.e2e" -t helios-installer-e2e "${REPO_ROOT}"
+  echo "[host] Running E2E tests inside container …"
+  exec docker run --rm helios-installer-e2e
+fi
+
 INSTALLER_DIR="/helios-installer"
 INSTALL_SH="${INSTALLER_DIR}/install.sh"
 
@@ -132,7 +145,9 @@ assert_true "Node.js version >= 18 (found: $(node -v))" "${node_version_ok}"
 # If check_prerequisites is defined, run it non-fatally
 if declare -f check_prerequisites &>/dev/null; then
   prereq_result=0
-  check_prerequisites 2>/dev/null || prereq_result=$?
+  # Run in subshell: check_prerequisites calls exit (not return) on failure,
+  # which would kill this script.  A subshell contains the exit.
+  (check_prerequisites) 2>/dev/null || prereq_result=$?
   assert_true "check_prerequisites() ran successfully" "${prereq_result}"
 else
   echo -e "  ${YELLOW}⚠${RESET}  check_prerequisites() not exported — skipping function test"
@@ -222,6 +237,43 @@ if [[ "${env_exists_result}" == "0" ]]; then
   assert_true ".env.template copied to ${env_dest}" "${copy_env_result}"
   rm -f "${env_dest}"
 fi
+
+# ─── 6. npm cache recovery ─────────────────────────────────────────────────────
+section "npm cache recovery"
+
+test_npm_cache_recovery() {
+  echo "Testing npm cache recovery logic..."
+  
+  # Verify the recovery function exists
+  if ! grep -q 'npm_install_with_recovery()' "$INSTALLER_DIR/install.sh"; then
+    echo "FAIL: npm_install_with_recovery() not found in install.sh"
+    return 1
+  fi
+  
+  # Verify it's used by install_agent_deps
+  if ! grep -A50 'install_agent_deps()' "$INSTALLER_DIR/install.sh" | grep -q 'npm_install_with_recovery'; then
+    echo "FAIL: install_agent_deps doesn't use npm_install_with_recovery"
+    return 1
+  fi
+  
+  # Test with clean environment (should pass first try)
+  local test_dir
+  test_dir=$(mktemp -d)
+  echo '{"name":"test","version":"1.0.0","private":true,"dependencies":{}}' > "$test_dir/package.json"
+  
+  if ! (cd "$test_dir" && npm install --production --legacy-peer-deps --no-audit --no-fund 2>&1); then
+    echo "FAIL: basic npm install doesn't work in this environment"
+    rm -rf "$test_dir"
+    return 1
+  fi
+  
+  rm -rf "$test_dir"
+  echo "PASS: npm cache recovery logic present and install works"
+}
+
+npm_recovery_result=0
+test_npm_cache_recovery || npm_recovery_result=$?
+assert_true "npm_install_with_recovery() present and npm install works" "${npm_recovery_result}"
 
 # ─── Summary ──────────────────────────────────────────────────────────────────
 echo ""
