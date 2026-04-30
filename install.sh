@@ -1375,7 +1375,7 @@ install_packages() {
       if [[ -f "${pkg_dir}package.json" ]] && [[ ! -d "${pkg_dir}node_modules" ]]; then
         local pkg_name
         pkg_name="$(basename "$pkg_dir")"
-        run_with_spinner "npm install: $pkg_name" npm install --prefix "$pkg_dir" --production 2>>"${LOG_FILE:-/dev/null}" || {
+        run_with_spinner "npm install: $pkg_name" npm install --prefix "$pkg_dir" --production --legacy-peer-deps --no-audit --no-fund 2>>"${LOG_FILE:-/dev/null}" || {
           warn "npm install failed for $pkg_name — may work without it"
         }
       elif [[ -d "${pkg_dir}node_modules" ]]; then
