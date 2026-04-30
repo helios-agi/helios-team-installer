@@ -146,7 +146,7 @@ trap 'echo "🧹 Cleaning up temp dir: ${TMPDIR}"; rm -rf "${TMPDIR}"' EXIT
 
 echo ""
 echo "📋 Copying helios-agent from ${SOURCE_DIR} ..."
-echo "   Excluding: .git/, node_modules/, .env, auth.json, settings.json,"
+echo "   Excluding: .git/, .env, auth.json, settings.json,"
 echo "              .venv/, __pycache__/, .pytest_cache/, coding-matrix-data.json,"
 echo "              governance/events.jsonl, governance/inline-enforce.jsonl,"
 echo "              sessions/, .helios/, .backup.*, *.log, *.disabled,"
