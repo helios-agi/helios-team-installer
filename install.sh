@@ -1616,6 +1616,17 @@ install_agent_deps() {
     return 0
   fi
 
+  # CHECK_ONLY mode: report status without installing
+  if [[ "${CHECK_ONLY:-false}" == "true" ]]; then
+    if [[ -d "$PI_AGENT_DIR/node_modules/awilix" ]] && \
+       [[ -d "$PI_AGENT_DIR/node_modules/neo4j-driver" ]]; then
+      info "[check] install_agent_deps: awilix + neo4j-driver present"
+    else
+      info "[check] install_agent_deps: deps missing — would run npm install"
+    fi
+    return 0
+  fi
+
   # Check if deps were bundled in tarball (self-contained install)
   if [[ -d "$PI_AGENT_DIR/node_modules/awilix" ]] && \
      [[ -d "$PI_AGENT_DIR/node_modules/neo4j-driver" ]]; then
@@ -1627,8 +1638,22 @@ install_agent_deps() {
     fi
 
     if [[ "$native_ok" == "true" ]]; then
-      success "Agent deps present from tarball — native modules verified ✓"
-      return 0
+      # After native modules check passes, also verify ESM import works
+      local esm_ok=true
+      if [[ -f "$PI_AGENT_DIR/node_modules/@helios-agent/pi-coding-agent/dist/index.js" ]]; then
+        node --input-type=module -e "
+          import { pathToFileURL } from 'url';
+          await import(pathToFileURL('$PI_AGENT_DIR/node_modules/@helios-agent/pi-coding-agent/dist/index.js'));
+        " 2>/dev/null || esm_ok=false
+      else
+        esm_ok=false
+      fi
+
+      if [[ "$esm_ok" == "true" ]]; then
+        success "Agent deps verified — pi-coding-agent ESM import OK ✓"
+        return 0
+      fi
+      # ESM import failed — fall through to full npm install
     else
       info "Deps present but native modules need rebuild for $(uname -m)..."
       run_with_spinner "Rebuild native modules" \
