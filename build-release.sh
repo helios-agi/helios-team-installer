@@ -146,7 +146,7 @@ trap 'echo "🧹 Cleaning up temp dir: ${TMPDIR}"; rm -rf "${TMPDIR}"' EXIT
 
 echo ""
 echo "📋 Copying helios-agent from ${SOURCE_DIR} ..."
-echo "   Excluding: .git/, .env, auth.json, settings.json,"
+echo "   Excluding: .git/, node_modules/ (reinstalled fresh in staging), .env, auth.json, settings.json,"
 echo "              .venv/, __pycache__/, .pytest_cache/, coding-matrix-data.json,"
 echo "              governance/events.jsonl, governance/inline-enforce.jsonl,"
 echo "              sessions/, .helios/, .backup.*, *.log, *.disabled,"
@@ -156,6 +156,7 @@ rsync -a \
   --exclude='*.sock' \
   --exclude='run/' \
   --exclude='.git/' \
+  --exclude='node_modules/' \
   --exclude='.venv/' \
   --exclude='__pycache__/' \
   --exclude='*.pyc' \
@@ -487,7 +488,7 @@ echo "   This makes the tarball self-contained — no npm install needed on targ
 # Agent root dependencies (awilix, neo4j-driver, better-sqlite3, etc.)
 if [[ -f "${STAGE_DIR}/package.json" ]]; then
   echo "  → Agent root: npm install --production ..."
-  (cd "${STAGE_DIR}" && npm install --production --no-audit --no-fund 2>&1 | tail -5) || {
+  (cd "${STAGE_DIR}" && npm install --production --legacy-peer-deps --no-audit --no-fund 2>&1 | tail -5) || {
     echo "❌ FATAL: Agent root npm install failed. Tarball would be broken."
     exit 1
   }
@@ -502,7 +503,7 @@ for pkg_dir in "${STAGE_DIR}/git/github.com/helios-agi"/*/; do
     pkg_name="$(basename "$pkg_dir")"
     dep_count=$(grep -c '"' "${pkg_dir}/package.json" 2>/dev/null || echo "0")
     if [[ "$dep_count" -gt 0 ]]; then
-      (cd "$pkg_dir" && npm install --production --no-audit --no-fund 2>/dev/null) && {
+      (cd "$pkg_dir" && npm install --production --legacy-peer-deps --no-audit --no-fund 2>/dev/null) && {
         ((pkg_deps_installed++)) || true
       } || {
         echo "    ⚠ npm install failed for ${pkg_name} — non-fatal"
